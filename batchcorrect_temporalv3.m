@@ -2,6 +2,7 @@
 %%% combine into a single txt file
 %%% Version History
 %%% v2 - filename parsing for power-normalizing, picking maxima
+%%% v3 - finding time 0, image work
 
 %%% Open Terminal before running
 %%% Copy to directory with data in subfolders
@@ -11,9 +12,10 @@ Table1 = []; % for writing to individual _proc.txt files
 Table2 = []; % for combining all data into one table for further analysis
 D = pwd; % get current directory
 S = dir(fullfile(D,'*')); % search current directory
-N = setdiff({S([S.isdir]).name},{'.','..'}); % list of subfolders of D
+N = setdiff({S([S.isdir]).name},{'.','..'}); % list of subfolders of D 
+% - done by taking all directories and removing . and ..
 for ii = 1:numel(N) % ii = subfolder number
-    T = dir(fullfile(D,N{ii},'*.txt')); % look for .txt files in subfolder
+    T = dir(fullfile(D,N{ii},'*.txt')); % look for .txt files in subfolders
     C = {T(~[T.isdir]).name}; % all .txt files in subfolder ii
     for jj = 1:numel(C) % jj = file number in subfolder ii
         F = fullfile(D,N{ii},C{jj});
@@ -51,6 +53,7 @@ for ii = 1:numel(N) % ii = subfolder number
         xlabel('Position (mm)')
         ylabel('DC signal (AU)')
         DCcheckname = string(F) + '_ch1_bs_corr.png';
+%%% Comment here to stop figure saving
         saveas(fig1,DCcheckname)
 
         fig2 = figure('visible','off');
@@ -58,6 +61,7 @@ for ii = 1:numel(N) % ii = subfolder number
         xlabel('Position (mm)')
         ylabel('AC signal (AU)')
         ACcheckname = string(F) + '_ch2_bs_corr.png';
+%%% Comment here to stop figure saving
         saveas(fig2,ACcheckname)
 
         %%% Baseline correction
@@ -80,14 +84,9 @@ for ii = 1:numel(N) % ii = subfolder number
 
         % Extract experimental parameters from filename of type:
         % [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMT]-[chopper]-[etc]
-        pumpWLstrfull = char(fileinfo(1)); % extract pump WL from file name - "760nm" or "760m"
-        if strlength(pumpWLstrfull) == 5
-            pumpWLstr = pumpWLstrfull(1:end-2); % remove "nm" suffix - "760"
-            pumpWL = sscanf(pumpWLstr,'%f'); % convert to double-precision number
-        else
-            pumpWLstr = pumpWLstrfull(1:end-1); % remove "m" suffix - "760"
-            pumpWL = sscanf(pumpWLstr,'%f'); % convert to double-precision number
-        end
+        pumpWLstrfull = char(fileinfo(1)); % extract pump WL from file name - "760m"
+        pumpWLstr = pumpWLstrfull(1:end-1); % remove "m" suffix - "760"
+        pumpWL = sscanf(pumpWLstr,'%f'); % convert to double-precision number
         pumppowerstrfull = char(fileinfo(2)); % extract pump power from file name
         pumppowerstr = pumppowerstrfull(1:end-2); % remove "mW"
         pumppower = sscanf(pumppowerstr,'%f');
@@ -97,8 +96,8 @@ for ii = 1:numel(N) % ii = subfolder number
         IRpowerstrfull = char(fileinfo(4)); % extract IR power from file name
         IRpowerstr = IRpowerstrfull(1:end-2); % remove "mW"
         IRpower = sscanf(IRpowerstr,'%f');
-        IRWL = 1/((2/signalWL) - (1/1031.2)); % calculate DFG IR WL (nm)
-        IRWN = 1E7/IRWL; % calculate DFG IR WN (cm-1)
+        DFGWL = 1/((2/signalWL) - (1/1031.2)); % calculate DFG IR WL (nm)
+        DFGWN = 1E7/DFGWL; % calculate DFG IR WN (cm-1)
 
         % Normalize to 800 mW pump power and 70 mW IR power
         pumpnorm = 800/pumppower; %normalization factor for pump
@@ -116,7 +115,7 @@ for ii = 1:numel(N) % ii = subfolder number
             bookkeeping(4) = 'pumppower = ' + string(pumppower) + ' mW';
             bookkeeping(5) = 'signalWL = ' + string(signalWL) + ' nm';
             bookkeeping(6) = 'IRpower = ' + string(IRpower) + ' mW';
-            bookkeeping(7) = 'IRWN = ' + string(IRWN) + ' cm-1';
+            bookkeeping(7) = 'DFGWN = ' + string(DFGWN) + ' cm-1';
             for i = 5:length(fileinfo)
                 bookkeeping(i+3) = string(fileinfo(i));
             end
@@ -133,7 +132,7 @@ for ii = 1:numel(N) % ii = subfolder number
             values(4) = pumppower;
             values(5) = signalWL;
             values(6) = IRpower;
-            values(7) = IRWN;
+            values(7) = DFGWN;
         end
 
         % Save individual data to a table
@@ -141,6 +140,7 @@ for ii = 1:numel(N) % ii = subfolder number
         % Write to individual txt files in the individual folders
         % Includes raw data and fits to check back
         procfile = string(F) + '_proc.dat'; % writing to .dat so it doesn't get picked up if I run the analysis again
+%%% Comment here to stop individual data saving
         writetable(Table1,procfile);
 
         %%% Split into labels and values for easier MATLAB processing
@@ -155,7 +155,7 @@ for ii = 1:numel(N) % ii = subfolder number
         oldnames = ["bookkeeping","values","x","corrnormDC","corrnormAC"]; 
         newnames = [bookname, valuename, xname, DCname, ACname];
 
-        %%% Combine all data into a table to be exported
+        %%% Combine processed data into a table to be exported
         TF = isempty(Table2);
         if TF == 1 % for the first dataset
             Table2 = strings(length(x),1); % create table of correct length
@@ -173,7 +173,7 @@ for ii = 1:numel(N) % ii = subfolder number
 end
 
 %%% Write out all data to one txt file
-%writetable(Table2,'batch_processed.txt');
+writetable(Table2,'batch_processed.txt');
 
 %% Load batch-processed data
 
@@ -191,142 +191,131 @@ for i = 1:infowidth
     infotable(:,i) = Table2(:,j);
 end
 
-% Create array with only numbers from Table2
+% Create array with only numeric data from Table2
 dataarray = zeros(height(Table2),width(Table2));
 dataarray(:,:) = table2array(Table2(:,:));
 
-x = dataarray(:,3); % in case I load in Table2 from batch_processed data
+%x = dataarray(:,3); % in case I load in Table2 from batch_processed data
 
-%%% File annotation - PMT10 unless otherwise specified
-% 1; 1. Rh800 100 uM alignment benchmark
-% 6; 10. 6 mM NB 5 uM Rh800
-% 11; 11. 5 mM NB 5 uM Rh800
-% 16; 12. 9 mM NB control
-% 21; 13. 8 mM NB control
-% 26; 14. 7 mM NB control
-% 31; 15. 6 mM NB control
-% 36; 16. 5 mM NB control
-% 41; 16. 5 mM NB control repeat
-% 46; 17. 3 mM NB control
-% 51; 18. 1 mM NB control
-% 56; 19. 0.1 mM NB control
-% 61; 19. 0.1 mM NB control PMT100
-% 66; 2. 5 uM Rh800 BonFIRE control
-% 71; 20. 3 mM NB 5 uM Rh800
-% 76; 21. 1 mM NB 5 uM Rh800
-% 81; 21. 1 mM NB 5 uM Rh800 dt 1s tc 300ms
-% 86; 21. 1 mM NB 5 uM Rh800 dt 1s tc 50 ms
-% 91; 22. 0.1 mM NB 5 uM Rh800
-% 96; 22. 0.1 mM NB 5 uM Rh800 PMT100
-% 101; 3. 5 uM Rh800 vsFRET control (Rh800 filter)
-% 106; 3. 5 uM Rh800 vsFRET control (vsFRET filter)
-% 111; 4. 10 mM NB BonFIRE control PMT1
-% 116; 4. 10 mM NB BonFIRE control
-% 121; 5. 10 mM NB vsFRET control shutteroff
-% 126; 5. 10 mM NB vsFRET control 
-% 131; 5. 10 mM NB vsFRET control shutteroff IR on
-% 136; 5. 10 mM NB vsFRET control shutteroff PMT100 - comparing to previous
-% 141; 5. 10 mM NB vsFRET control shutteroff PMT1 - comparing to previous
-% 146; 6. 10 mM NB 5 uM Rh800 PMT1
-% 151; 6. 10 mM NB 5 uM Rh800
-% 156; 7. 9 mM NB 5 uM Rh800 PMT1
-% 161; 7. 9 mM NB 5 uM Rh800 
-% 166; 7. 9 mM NB 5 uM Rh800 PMT2
-% 171; 7. 9 mM NB 5 uM Rh800 PMT4
-% 176; 7. 9 mM NB 5 uM Rh800 PMT6
-% 181; 7. 9 mM NB 5 uM Rh800 PMT8
-% 186; 8. 8 mM NB 5 uM Rh800 PMT1
-% 191; 8. 8 mM NB 5 uM Rh800 PMT10 (initial)
-% 196; 8. 8 mM NB 5 uM Rh800 PMT100
-% 201; 8. 8 mM NB 5 uM Rh800 PMT10 (final)
-% 206; 8. 8 mM NB 5 uM Rh800 PMT2
-% 211; 8. 8 mM NB 5 uM Rh800 PMT20
-% 216; 8. 8 mM NB 5 uM Rh800 PMT4
-% 221; 8. 8 mM NB 5 uM Rh800 PMT40
-% 226; 8. 8 mM NB 5 uM Rh800 PMT6
-% 231; 8. 8 mM NB 5 uM Rh800 PMT60
-% 236; 8. 8 mM NB 5 uM Rh800 PMT8
-% 241; 8. 8 mM NB 5 uM Rh800 PMT80
-% 246; 9. 7 mM NB 5 uM Rh800
+%%% File annotation
+%	1	;	
+%	6	;	
+%	11	;	
+%	16	;	
+%	21	;	
+%	26	;	
+%	31	;	
+%	36	;	
+%	41	;	
+%	46	;	
+%	51	;	
+%	56	;	
+%	61	;	
+%	66	;	
+%	71	;	
+%	76	;	
+%	81	;	
+%	86	;	
+%	91	;	
+%	96	;	
+%	101	;	
+%	106	;	
+%	111	;	
+%	116	;	
+%	121	;	
+%	126	;	
+%	131	;	
+%	136	;	
+%	141	;	
+%	146	;	
+%	151	;	
 
-% Looking at PMT gain trend with 8 mM NB 5 uM Rh800 data
-pmtgain = [1 2 4 6 8 10 10 20 40 60 80 100];
-pmtgainlabel(:) = string("Gain " + pmtgain(:));
-pmtarrayAC(:,1) = dataarray(:,190); % PMT1
-pmtarrayAC(:,2) = dataarray(:,210); % PMT2
-pmtarrayAC(:,3) = dataarray(:,220); % PMT4
-pmtarrayAC(:,4) = dataarray(:,230); % PMT6
-pmtarrayAC(:,5) = dataarray(:,240); % PMT8
-pmtarrayAC(:,6) = dataarray(:,195); % PMT10 initial
-pmtarrayAC(:,7) = dataarray(:,205); % PMT10 final
-pmtarrayAC(:,8) = dataarray(:,215); % PMT20
-pmtarrayAC(:,9) = dataarray(:,225); % PMT40
-pmtarrayAC(:,10) = dataarray(:,235); % PMT60
-pmtarrayAC(:,11) = dataarray(:,245); % PMT80
-pmtarrayAC(:,12) = dataarray(:,200); % PMT100
+% Example parsing
+%pmtgain = [1 2 4 6 8 10 10 20 40 60 80 100];
+%pmtgainlabel(:) = string("Gain " + pmtgain(:));
+%pmtarrayAC(:,1) = dataarray(:,190); % PMT1
+%pmtarrayAC(:,2) = dataarray(:,210); % PMT2
 
-% Plot PMT gain
+% Example finding time 0
+%cmmps = 299792458*1E3*1E-12; % c in mm/ps
+%[pmtarray1peak, t0index] = max(pmtarray(:,1));
+%t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
+
+% Example plot
 %figure;
-%plot(x,pmtarrayAC(:,1),x,pmtarrayAC(:,2),x,pmtarrayAC(:,3),x,pmtarrayAC(:,4),x,pmtarrayAC(:,5),x,pmtarrayAC(:,6),x,pmtarrayAC(:,7),x,pmtarrayAC(:,8),x,pmtarrayAC(:,9),x,pmtarrayAC(:,10),x,pmtarrayAC(:,11),x,pmtarrayAC(:,12))
+%plot(x,pmtarrayAC(:,1),x,pmtarrayAC(:,2),'-o') % the "-" means you get the trace and markers together
 %xlabel('Position (mm)')
 %ylabel('Corrected AC signal (AU)')
 %legend(pmtgainlabel)
 
-% Integrated PMT gain data
-pmtmax = max(pmtarrayAC);
-pmtint = sum(pmtarrayAC);
+% Example peak vs integration data
+%pmtmax = max(pmtarrayAC);
+%pmtint = sum(pmtarrayAC);
 
 %figure;
 %plot(pmtgain,pmtint,'-o') % the "-" means you get the trace and markers together
 %xlabel('PMT Gain')
 %ylabel('Integrated AC signal (AU)')
 
-% 3D-plot of PMT gain as a function of position and PMT gain
-[gain,pos] = meshgrid(pmtgain,x);
-
+% Example 3D-plot
+%[gain,pos] = meshgrid(pmtgain,x);
 %figure;
 %surf(gain,pos,pmtarrayAC)
 %xlabel('PMT Gain')
 %ylabel('Position (mm)')
 %zlabel('Corrected AC signal (AU)')
 
-% Isolate [NB] controls
-nbconc = [0.1 1 3 5 6 7 8 9 10]; % mM
-nbconclabel(:) = string(nbconc(:) + " mM");
-nbcontAC(:,1) = dataarray(:,60); % 0.1 mM
-nbcontAC(:,2) = dataarray(:,55); % 1 mM
-nbcontAC(:,3) = dataarray(:,50); % 3 mM
-nbcontAC(:,4) = dataarray(:,40); % 5 mM
-nbcontAC(:,5) = dataarray(:,35); % 6 mM
-nbcontAC(:,6) = dataarray(:,30); % 7 mM
-nbcontAC(:,7) = dataarray(:,25); % 8 mM
-nbcontAC(:,8) = dataarray(:,20); % 9 mM
-nbcontAC(:,9) = dataarray(:,130); % 10 mM
-
-% Plot NB controls
+% Example error bar plot
 %figure;
-%plot(x,nbcontAC(:,1),x,nbcontAC(:,2),x,nbcontAC(:,3),x,nbcontAC(:,4),x,nbcontAC(:,5),x,nbcontAC(:,6),x,nbcontAC(:,7),x,nbcontAC(:,8),x,nbcontAC(:,9))
-%xlabel('Position (mm)')
-%ylabel('Corrected AC signal (AU)')
-%legend(nbconclabel)
-
-% Max and integrated signal as a function of [NB]
-nbmax = max(nbcontAC);
-nbint = sum(nbcontAC);
-%figure;
-%plot(nbconc,nbmax)
+%errorbar(nbconc,meanints,stdevints)
 %xlabel('[NB] (mM)')
-%ylabel('Max AC signal')
+%ylabel('Mean AC integrated signal (AU)')
 
-%figure;
-%plot(nbconc,nbint,'-o') % the "-" means you get the trace and markers together
-%xlabel('[NB] (mM)')
-%ylabel('Integrated AC signal (AU)')
+%% Processing images
+% Example loading measurements from Fiji
+%unsortimage = readtable('./Images/BonFIRE/BFimages.csv','VariableNamingRule','preserve');
+%imagetable = sortrows(unsortimage,2); % sort by second column (should be filename)
 
-% Looks like integrated and max signal agree well for single-decay temporal sweeps
+% Isolate RawIntDen (sum of pixel values) in a vector
+%imagedata(:,1) = imagetable(:,8); % still a table at this point
+%rawintden(:,:) = table2array(imagedata(:,:));
+
+% Separate rawintden into individual columns in an array
+%BFimages = zeros(3,9);
+%BFimages(:,1) = rawintden(1:3); % 0.5 mM
+%BFimages(:,9) = rawintden(4:6); % 10 mM
+%BFimages(:,2) = rawintden(7:9); % 1 mM
+%BFimages(:,3) = rawintden(10:12); % 3 mM
+%BFimages(:,4) = rawintden(13:15); % 5 mM
+%BFimages(:,5) = rawintden(16:18); % 6 mM
+%BFimages(:,6) = rawintden(19:21); % 7 mM
+%BFimages(:,7) = rawintden(22:24); % 8 mM
+%BFimages(:,8) = rawintden(25:27); % 9 mM
 
 
 %% Appendix
+%%% Load-in tif images - needed the image processing toolbox (will probably
+%%% work now)
+%cd Images
+%D2 = pwd; % set directory
+%S2 = dir(fullfile(D2,'*tempOFF*.tif')); % search D2 for tempOFF.tif files
+%N2 = {S2.name}; % list of .tif files in D2
+%tempoff = [];
+%for ii = 1:numel(N2)
+%    image = Tiff(char(N2(ii)),'r');
+%    tiffdata = read(image);
+%    tempoff = [tempoff tiffdata];
+%end
+
+%S3 = dir(fullfile(D2,'*tempON*.tif')); % search D2 for tempON.tif files
+%N3 = {S3.name}; % list of .tif files in D2
+%tempon = [];
+%for ii = 1:numel(N3)
+%    image = Tiff(char(N3(ii)),'r');
+%    tiffdata = read(image);
+%    tempoff = [tempoff tiffdata];
+%end
+
 %%% Write out all data to one txt file (replaced)
 %Tfinal = Table2;
 %Tfinal(:,1) = [];
