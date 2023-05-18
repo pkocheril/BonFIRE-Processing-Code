@@ -3,11 +3,16 @@
 %%% Version History
 %%% v2 - filename parsing for power-normalizing, picking maxima
 %%% v3 - finding time 0, image work
+%%% v4 - convolution temporal fitting, normalizing with ND -- in progress
+%%% -- replaced by batchfit_temporal
 
-%%% Open Terminal before running
 %%% Copy to directory with data in subfolders
+%%% Update guesses as needed - can try fit_temporal.m on one first
 
-%% Baseline correction, power-normalization, and combining into a single Table
+%% Batch processing
+%%% Baseline correction, power-normalization, temporal sweep fitting,
+%%% and writing out processed data in tables
+guesses = [0.04 6.4 228 0.063];
 Table1 = []; % for writing to individual _proc.txt files
 Table2 = []; % for combining all data into one table for further analysis
 D = pwd; % get current directory
@@ -77,13 +82,13 @@ for ii = 1:numel(N) % ii = subfolder number
         corrDC = DC-fitDC;
         corrAC = AC-fitAC;
 
-        % Parse filename
-        folderinfo = split(F,"/"); % could also use fileparts for this
-        fileinfo = split(folderinfo(end),"-");
-        subfolderinfo = split(N{ii}," ");
+        % Parse filename - could also use fileparts for this
+        folderinfo = split(F,"/"); % split path into folders
+        fileinfo = split(folderinfo(end),"-"); % split filename by hyphens
+        subfolderinfo = split(N{ii}," "); % split subfolder by spaces
 
         % Extract experimental parameters from filename of type:
-        % [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMT]-[chopper]-[etc]
+        % [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-[chopper]-[PMTBW]-[etc]
         pumpWLstrfull = char(fileinfo(1)); % extract pump WL from file name - "760m"
         pumpWLstr = pumpWLstrfull(1:end-1); % remove "m" suffix - "760"
         pumpWL = sscanf(pumpWLstr,'%f'); % convert to double-precision number
@@ -173,7 +178,7 @@ for ii = 1:numel(N) % ii = subfolder number
 end
 
 %%% Write out all data to one txt file
-writetable(Table2,'batch_processed.txt');
+writetable(Table2,'batch_processed_v4.txt');
 
 %% Load batch-processed data
 
