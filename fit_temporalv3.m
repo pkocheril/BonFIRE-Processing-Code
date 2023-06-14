@@ -1,13 +1,49 @@
 %% Fit temporal sweep data
 %%% v2 - fit to Gaussian*biexponential with optional beating
+%%% v3 - added ability to fit linear background and compared 
+% trust-region-reflective vs levenberg-marquardt (TRR is better)
 
-% Load data - needs to be baseline-corrected temporal data
-data = importdata('779m_proc.txt');
-t = data(:,1);
-signal = data(:,2);
+% Load data
+data = importdata('779m-706mW-1770.8nm-68mW-ND1-PMT1-10kHz-250kHz.txt');
+x = data(:,1);
+DC = data(:,2);
+AC = data(:,3);
 
-% Need length(tconv)*2+1 = length(t) --> t needs odd length
-% Check if t is odd
+% Converting to time
+cmmps = 299792458*1E3*1E-12; % c in mm/ps
+t = zeros([length(x),1]);
+[corrACmax, t0index] = max(AC); % estimating t0 by AC peak (rough)
+t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
+
+% Baseline fitting - fit first 10% and last 5%
+cut = length(t)*0.05;
+tlow = t(2*ceil(cut)); % xlow as 10th %ile
+thigh = t(end-floor(cut)); % xhigh as 95th %ile
+
+% Setup excluded points for baseline fitting
+excludeDupes = zeros(size(t));
+for i = 1:length(t)
+    if t(i) > tlow && t(i) < thigh
+        excludeDupes(i) = i;
+    end
+end
+
+% Remove duplicates from exclude list
+excludeunique = unique(excludeDupes(:).'); % adding the .' transposes it into a row vector
+exclude1 = nonzeros(excludeunique); % isolate nonzero data positions to exclude
+
+% Fit baselines with lines
+baseDC = fit(t,DC,'poly1','Exclude',exclude1);
+baseAC = fit(t,AC,'poly1','Exclude',exclude1);
+
+% Save coefficient values from fit to vector
+basecoefDC = coeffvalues(baseDC);
+basecoefAC = coeffvalues(baseAC);
+
+% Convolution fitting
+signal = AC;
+
+% Make odd-length tconv for convolution
 if mod(length(t),2) == 0 % if t is even
     t(length(t)+1) = t(end) + abs(t(end)-t(end-1)); % add a value to t
     signal(length(signal)+1) = signal(end); % add a value to signal
@@ -19,8 +55,8 @@ fun = @(r) conv(exp(-r(2)*(tconv-r(1)).^2), ...
     r(3)*exp(-r(4)*(tconv-r(1)))+r(5)*exp(-r(6)*(tconv-r(1)))+ ...
     r(7)*exp(-r(8)*(tconv-r(1))).*cos(r(9)*tconv-r(10))+ ...
     r(11)*exp(-r(12)*(tconv-r(1))).*cos(r(13)*tconv-r(14))+ ...
-    r(15)*exp(-r(16)*(tconv-r(1))).*cos(r(17)*tconv-r(18))) ...
-    -signal;
+    r(15)*exp(-r(16)*(tconv-r(1))).*cos(r(17)*tconv-r(18)))+ ...
+    r(19)*t+r(20)-signal;
 
 % Initial guesses for r
 cent = 0; % r(1), ps -- center
@@ -29,6 +65,8 @@ eamp1 = 1e-3; % r(3) -- amplitude 1
 edec1 = 1/2; % r(4), ps^-1 -- 1/lifetime 1
 eamp11 = 1e-4; % r(5)  -- amplitude 1.1
 edec11 = 1/10; % r(6), ps^-1  -- 1/lifetime 1.1
+slope = basecoefAC(1); % slope from baseline fit
+intercept = basecoefAC(2); % intercept from baseline fit
 
 % Beating terms - can use 0.1, 0.1, 0.5, 0 for beating initial guesses
 eamp2 = 0; % r(7) -- amplitude 2 (beat 1)
@@ -48,15 +86,18 @@ phs3 = 0; % r(18), rad -- beat phase 3
 r0 = [cent,gwid,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
     eamp2,edec2,fr1,phs1,... % first beating term
     eamp3,edec3,fr2,phs2... % second beating term
-    eamp4,edec4,fr3,phs3]; % third beating term
+    eamp4,edec4,fr3,phs3,... % third beating term
+    slope,intercept];
 lb = [-10,0,0,0,0,0,... % lower bounds
     0,0,0,-180,...
     0,0,0,-180,...
-    0,0,0,-180];
+    0,0,0,-180,...
+    basecoefAC(1),basecoefAC(2)];
 ub = [20,9,9,9,9,9,... % upper bounds
     0,9,9,180,... % set first value to 0 to mute beating
     0,9,9,180,... % set first value to 0 to mute beating
-    0,9,9,180]; % set first value to 0 to mute beating
+    0,9,9,180,... % set first value to 0 to mute beating
+    basecoefAC(1),basecoefAC(2)];
 
 % Option to fit or just plot initial guesses
 fityn = 1; % 1 = do fitting, 0 = plot initial guesses
@@ -88,7 +129,8 @@ fitcurve = conv(exp(-fitval(2)*(tconv-fitval(1)).^2), ...
     fitval(11)*exp(-fitval(12)*(tconv-fitval(1))).* ...
     cos(fitval(13)*tconv-fitval(14))+ ...
     fitval(15)*exp(-fitval(16)*(tconv-fitval(1))).* ...
-    cos(fitval(17)*tconv-fitval(18)));
+    cos(fitval(17)*tconv-fitval(18)))+...
+    fitval(19)*t+fitval(20);
 
 % Calculate residuals, lifetimes, and Gaussian FWHM
 resid = signal-fitcurve;
