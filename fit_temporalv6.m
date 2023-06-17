@@ -6,13 +6,17 @@
 % tried Gaussian IRF pre-fitting, but it doesn't work
 %%% v5 - cleaned up v4 and fixed FWHM calculation, also verified that
 % Gaussian amplitude term isn't needed and doesn't affect lifetimes
+%%% v6 - added R^2 calculation
 
 % Load data
 clear; close all;
-data = importdata('779m-706mW-1770.8nm-68mW-ND1-PMT1-10kHz-250kHz.txt');
+filename = '779m-706mW-1770.8nm-68mW-ND1-PMT1-10kHz-250kHz.txt';
+data = importdata(filename);
 x = data(:,1);
 DC = data(:,2);
 AC = data(:,3);
+
+outputfile = 'Fit_' + string(filename(1:end-4)) + '.png';
 
 % Converting to time
 cmmps = 299792458*1E3*1E-12; % c in mm/ps
@@ -138,7 +142,9 @@ fitcurve = conv(sigamp*exp(-fitval(2)*(tc-fitval(1)).^2), ...
 
 % Calculate residuals, ssresid, IRF FWHM, and lifetimes
 resid = sigint-fitcurve;
-ssresid = sum(resid.^2);
+ssresid = sum(resid.^2); % sum of squares of residuals
+tss = sum((sigint-mean(sigint)).^2); % total sum of squares
+r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
 FWHM = sqrt(log(2)/fitval(2)); % pulse width, ps
 lifetime1 = 1/fitval(4);
 lifetime2 = 1/fitval(6);
