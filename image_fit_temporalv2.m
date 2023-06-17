@@ -1,12 +1,19 @@
 %% Fit temporal sweep image data
 %%% initially written from fit_temporal_v3
+%%% v2 - added lifetime parsing logic
 
 clear; clc; close all; warning off;
 % Load data
 x = importdata("Tlist.txt");
-data = double(tiffreadVolume("FOV1_64X64_Idler2159.9_DFG5377.6_P0.0657_CH2.tif"));
+data = double(tiffreadVolume("FOV1_64X64_Idler2228.1_DFG5241.3_P0.1493_CH2.tif"));
 % x by y by z -- x by y images, z is temporal
 imagesize = size(data);
+
+% Image to save to
+tiffname = 'biexp_one3.6_lifetimes_FOV1.tif';
+
+% Uncomment for testing with subset of image
+%imagesize(1) = 3; imagesize(2) = 3;
 
 % Estimating t0 index by AC peak (rough)
 cmmps = 299792458*1E3*1E-12; % c in mm/ps
@@ -14,7 +21,6 @@ cmmps = 299792458*1E3*1E-12; % c in mm/ps
 
 % Matrices to write lifetimes to
 lifetime1 = zeros([imagesize(1) imagesize(2)]);
-%lifetime1 = zeros([3,3]); % for testing with 3x3 subset of image
 lifetime2 = lifetime1;
 ssresid = lifetime1;
 FWHM = lifetime1;
@@ -92,12 +98,12 @@ for ii=1:imagesize(1)
             eamp3,edec3,fr2,phs2... % second beating term
             eamp4,edec4,fr3,phs3,... % third beating term
             slope,intercept];
-        lb = [-10,0,0,0,0,0,... % lower bounds
+        lb = [-10,0,0,0,0,1/3.6,... % lower bounds
             0,0,0,-180,...
             0,0,0,-180,...
             0,0,0,-180,...
             basecoef(1),basecoef(2)];
-        ub = [20,9,9,9,9,9,... % upper bounds
+        ub = [20,9,9,9,9,1/3.6,... % upper bounds - eamp11=0 for monoexp
             0,9,9,180,... % set first value to 0 to mute beating
             0,9,9,180,... % set first value to 0 to mute beating
             0,9,9,180,... % set first value to 0 to mute beating
@@ -134,29 +140,71 @@ for ii=1:imagesize(1)
             cos(fitval(17)*tconv-fitval(18)))+...
             fitval(19)*t+fitval(20);
         
-        % Calculate residuals, lifetimes, and Gaussian FWHMs
+        % Calculate residuals and Gaussian FWHMs
         resid = signal-fitcurve;
         ssresid(ii,jj) = sum(resid.^2);
-        if 1/fitval(4) < 1e3
-            lifetime1(ii,jj) = 1/fitval(4); % ps
-        else
-            lifetime1(ii,jj) = 0; %
-        end
-        if 1/fitval(6) < 1e3
-            lifetime2(ii,jj) = 1/fitval(6); % ps
-        else
-            lifetime2(ii,jj) = 0; % ps
-        end
         FWHM(ii,jj) = 2*log(2)*sqrt(1/(2*fitval(2))); % ps
+
+        % Lifetime assignment logic - want lifetime1 to be shorter
+        if 1/fitval(4) < 1/fitval(6)
+            if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
+                lifetime1(ii,jj) = 1/fitval(4); % ps
+            else
+                lifetime1(ii,jj) = 0; %
+            end
+            if 1/fitval(6) < 1e2
+                lifetime2(ii,jj) = 1/fitval(6); % ps
+            else
+                lifetime2(ii,jj) = 0; % ps
+            end
+        else % means 1/fitval(6) is shorter --> swap lifetime1 and 2
+            if 1/fitval(4) < 1e2
+                lifetime2(ii,jj) = 1/fitval(4); % ps
+            else
+                lifetime2(ii,jj) = 0; %
+            end
+            if 1/fitval(6) < 1e2
+                lifetime1(ii,jj) = 1/fitval(6); % ps
+            else
+                lifetime1(ii,jj) = 0; % ps
+            end
+        end
+
+        % Lifetime assignment logic 2 - if only one lifetime floated, put
+        % in lifetime1
+        if lb(6) == ub(6) % if lifetime is held constant
+            if 1/fitval(4) < 1e2
+                lifetime1(ii,jj) = 1/fitval(4); % ps
+            else
+                lifetime1(ii,jj) = 0; %
+            end
+            if 1/fitval(6) < 1e2
+                lifetime2(ii,jj) = 1/fitval(6); % ps
+            else
+                lifetime2(ii,jj) = 0; % ps
+            end
+        end
+        if lb(4) == ub(4) % if only one lifetime floated, put in lifetime1
+            if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
+                lifetime2(ii,jj) = 1/fitval(4); % ps
+            else
+                lifetime2(ii,jj) = 0; %
+            end
+            if 1/fitval(6) < 1e2 % only keep reasonable values < 100 ps
+                lifetime1(ii,jj) = 1/fitval(6); % ps
+            else
+                lifetime1(ii,jj) = 0; % ps
+            end
+        end
     end
 end
 
 % Save data
-Save_tiff('lifetimes.tif',lifetime1,lifetime2,ssresid,FWHM,[])
+Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,[])
 
 %% Checking out problematic fits
-ii = 49; % y-value in Fiji
-jj = 7; % x-value in Fiji
+jj = 14; % x-value in Fiji
+ii = 38; % y-value in Fiji
 
 t = zeros([length(x),1]);
 t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
@@ -228,12 +276,12 @@ r0 = [cent,gwid,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
     eamp3,edec3,fr2,phs2... % second beating term
     eamp4,edec4,fr3,phs3,... % third beating term
     slope,intercept];
-lb = [-10,0,0,0,0,0,... % lower bounds
+lb = [-10,0,0,0,0,1/3.6,... % lower bounds
     0,0,0,-180,...
     0,0,0,-180,...
     0,0,0,-180,...
     basecoef(1),basecoef(2)];
-ub = [20,9,9,9,9,9,... % upper bounds
+ub = [20,9,9,9,9,1/3.6,... % upper bounds
     0,9,9,180,... % set first value to 0 to mute beating
     0,9,9,180,... % set first value to 0 to mute beating
     0,9,9,180,... % set first value to 0 to mute beating
