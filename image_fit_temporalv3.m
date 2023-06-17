@@ -1,82 +1,90 @@
 %% Fit temporal sweep image data
 %%% initially written from fit_temporal_v3
 %%% v2 - added lifetime parsing logic
+%%% v3 - updated based on fit_temporal_v5
 
 clear; clc; close all; warning off;
 % Load data
 x = importdata("Tlist.txt");
-data = double(tiffreadVolume("FOV1_64X64_Idler2228.1_DFG5241.3_P0.1493_CH2.tif"));
-% x by y by z -- x by y images, z is temporal
-imagesize = size(data);
+data = double(tiffreadVolume("FOV1_64X64_Idler2159.9_DFG5377.6_P0.0657_CH2.tif"));
+imagesize = size(data); % x by y by z -- x by y images, z is temporal
 
 % Image to save to
-tiffname = 'biexp_one3.6_lifetimes_FOV1.tif';
+tiffname = 'biexp_lifetimes_FOV1.tif';
 
-% Uncomment for testing with subset of image
-%imagesize(1) = 3; imagesize(2) = 3;
+% Test subset of image
+testsubset = 1; % 1 = do a test run, other = full processing
+subsize = 2; % size of subset for test run
+if testsubset == 1
+    imagesize(1) = subsize; imagesize(2) = subsize; % pick subset of image
+    showfits = 1; % show individual temporal fits
+    savedatayn = 0; % don't save data
+else
+    showfits = 0; % don't show fits
+    savedatayn = 1; % save data to tiff
+end
 
-% Estimating t0 index by AC peak (rough)
+% Matrices to write data to
+lifetime1 = zeros([imagesize(1) imagesize(2)]);
+lifetime2 = lifetime1; ssresid = lifetime1; FWHM = lifetime1;
+
+% Estimating t0 index by peak
 cmmps = 299792458*1E3*1E-12; % c in mm/ps
 [roughmax, t0index] = max(data(1,1,:));
+t = zeros([length(x),1]);
+t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
 
-% Matrices to write lifetimes to
-lifetime1 = zeros([imagesize(1) imagesize(2)]);
-lifetime2 = lifetime1;
-ssresid = lifetime1;
-FWHM = lifetime1;
+% Interpolate for convolution
+samplingRateIncrease = 2;
+tint = linspace(t(1), t(end), length(t)*samplingRateIncrease-1);
+tc = tint(1:2:end); % pulls odd values of tint for convolution
+
+% Setup baseline fitting cutoffs - fit first 10% and last 5%
+cutlow = 0.1; % 10th %ile
+cuthigh = 0.05; % 95th %ile
+tlow = t(ceil(length(t)*cutlow)); % using ceiling to round up
+thigh = t(end-ceil(length(t)*cuthigh));
+
+% Setup excluded points for baseline fitting
+excludeDupes = zeros([size(t),1]);
+for i = 1:length(t)
+    if t(i) > tlow && t(i) < thigh
+        excludeDupes(i) = i;
+    end
+end
+
+% Isolate data positions to exclude (unique, nonzero indices)
+exclude1 = nonzeros(unique(excludeDupes));
 
 for ii=1:imagesize(1)
     for jj=1:imagesize(2)
         % Set up vectors
-        t = zeros([length(x),1]);
-        t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
         signal = squeeze(data(ii,jj,:)); % pulls sweep data as vector
-        
-        % Baseline fitting - fit first 10% and last 5%
-        cut = length(t)*0.05;
-        tlow = t(2*ceil(cut)); % xlow as 10th %ile
-        thigh = t(end-ceil(cut)); % xhigh as 95th %ile
-        
-        % Setup excluded points for baseline fitting
-        excludeDupes = zeros(size(t));
-        for i = 1:length(t)
-            if t(i) > tlow && t(i) < thigh
-                excludeDupes(i) = i;
-            end
-        end
-        
-        % Remove duplicates from exclude list
-        excludeunique = unique(excludeDupes(:).'); % adding the .' transposes it into a row vector
-        exclude1 = nonzeros(excludeunique); % isolate nonzero data positions to exclude
-        
+        sigamp = max(signal)-min(signal); % used for Gaussian amplitude
+        sigint = spline(t, signal, tint); % interpolate signal
+
         % Fit baseline
         base = fit(t,signal,'poly1','Exclude',exclude1); % fit baseline
         basecoef = coeffvalues(base); % save coeff values
-                
-        % Make odd-length tconv for convolution
-        if mod(length(t),2) == 0 % if t is even
-            t(length(t)+1) = t(end) + abs(t(end)-t(end-1)); % add a value to t
-            signal(length(signal)+1) = signal(end); % add a value to signal
-        end
-        tconv = t(1:2:end); % pulls odd values of t
         
         % Define error function as fit (parameter vector r) minus signal
-        fun = @(r) conv(exp(-r(2)*(tconv-r(1)).^2), ...
-            r(3)*exp(-r(4)*(tconv-r(1)))+r(5)*exp(-r(6)*(tconv-r(1)))+ ...
-            r(7)*exp(-r(8)*(tconv-r(1))).*cos(r(9)*tconv-r(10))+ ...
-            r(11)*exp(-r(12)*(tconv-r(1))).*cos(r(13)*tconv-r(14))+ ...
-            r(15)*exp(-r(16)*(tconv-r(1))).*cos(r(17)*tconv-r(18)))+ ...
-            r(19)*t+r(20)-signal;
+        fun = @(r) conv(sigamp*exp(-r(2)*(tc-r(1)).^2), ...
+            r(3)*exp(-r(4)*(tc-r(1)))+r(5)*exp(-r(6)*(tc-r(1)))+ ...
+            r(7)*exp(-r(8)*(tc-r(1))).*cos(r(9)*tc-r(10))+ ...
+            r(11)*exp(-r(12)*(tc-r(1))).*cos(r(13)*tc-r(14))+ ...
+            r(15)*exp(-r(16)*(tc-r(1))).*cos(r(17)*tc-r(18)))+ ...
+            r(19)*tint+r(20)-sigint;
         
         % Initial guesses for r
+        % Gaussian terms
         cent = 0; % r(1), ps -- center
-        gwid = 0.1; % r(2), ps^-2 -- Gaussian width
-        eamp1 = 1e-3; % r(3) -- amplitude 1
+        gdec = 4*log(2)/(4^2); % r(2), ps^-2 -- Gaussian decay
+        
+        % Exponential terms
+        eamp1 = 1e-5; % r(3) -- amplitude 1
         edec1 = 1/2; % r(4), ps^-1 -- 1/lifetime 1
-        eamp11 = 1e-4; % r(5)  -- amplitude 1.1
+        eamp11 = 1e-3; % r(5)  -- amplitude 1.1
         edec11 = 1/10; % r(6), ps^-1  -- 1/lifetime 1.1
-        slope = basecoef(1); % slope from baseline fit
-        intercept = basecoef(2); % intercept from baseline fit
         
         % Beating terms - can use 0.1, 0.1, 0.5, 0 for beating initial guesses
         eamp2 = 0; % r(7) -- amplitude 2 (beat 1)
@@ -92,22 +100,26 @@ for ii=1:imagesize(1)
         fr3 = 0; % r(17), rad ps^-1 -- beat freq 3
         phs3 = 0; % r(18), rad -- beat phase 3
         
+        % Baseline terms
+        slope = basecoef(1); % r(19), slope from baseline fit
+        intercept = basecoef(2); % r(20), intercept from baseline fit
+        
         % Fit setup
-        r0 = [cent,gwid,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
+        r0 = [cent,gdec,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
             eamp2,edec2,fr1,phs1,... % first beating term
             eamp3,edec3,fr2,phs2... % second beating term
             eamp4,edec4,fr3,phs3,... % third beating term
             slope,intercept];
-        lb = [-10,0,0,0,0,1/3.6,... % lower bounds
+        lb = [-10,0,0,0,0,0,... % lower bounds
             0,0,0,-180,...
             0,0,0,-180,...
             0,0,0,-180,...
-            basecoef(1),basecoef(2)];
-        ub = [20,9,9,9,9,1/3.6,... % upper bounds - eamp11=0 for monoexp
+            slope,intercept];
+        ub = [20,9,9,9,9,9,... % upper bounds - eamp11=0 for monoexp
             0,9,9,180,... % set first value to 0 to mute beating
             0,9,9,180,... % set first value to 0 to mute beating
             0,9,9,180,... % set first value to 0 to mute beating
-            basecoef(1),basecoef(2)];
+            slope,intercept];
         
         % Option to fit or just plot initial guesses
         fityn = 1; % 1 = do fitting, 0 = plot initial guesses
@@ -129,21 +141,21 @@ for ii=1:imagesize(1)
         end
         
         % Generate curve for fitted parameters
-        fitcurve = conv(exp(-fitval(2)*(tconv-fitval(1)).^2), ...
-            fitval(3)*exp(-fitval(4)*(tconv-fitval(1)))+ ...
-            fitval(5)*exp(-fitval(6)*(tconv-fitval(1)))+ ...
-            fitval(7)*exp(-fitval(8)*(tconv-fitval(1))).* ...
-            cos(fitval(9)*tconv-fitval(10))+ ...
-            fitval(11)*exp(-fitval(12)*(tconv-fitval(1))).* ...
-            cos(fitval(13)*tconv-fitval(14))+ ...
-            fitval(15)*exp(-fitval(16)*(tconv-fitval(1))).* ...
-            cos(fitval(17)*tconv-fitval(18)))+...
-            fitval(19)*t+fitval(20);
+        fitcurve = conv(sigamp*exp(-fitval(2)*(tc-fitval(1)).^2), ...
+            fitval(3)*exp(-fitval(4)*(tc-fitval(1)))+ ...
+            fitval(5)*exp(-fitval(6)*(tc-fitval(1)))+ ...
+            fitval(7)*exp(-fitval(8)*(tc-fitval(1))).* ...
+            cos(fitval(9)*tc-fitval(10))+ ...
+            fitval(11)*exp(-fitval(12)*(tc-fitval(1))).* ...
+            cos(fitval(13)*tc-fitval(14))+ ...
+            fitval(15)*exp(-fitval(16)*(tc-fitval(1))).* ...
+            cos(fitval(17)*tc-fitval(18)))+...
+            fitval(19)*tint+fitval(20);
         
-        % Calculate residuals and Gaussian FWHMs
-        resid = signal-fitcurve;
+        % Calculate residuals, ssresid, and IRF FWHMs
+        resid = sigint-fitcurve;
         ssresid(ii,jj) = sum(resid.^2);
-        FWHM(ii,jj) = 2*log(2)*sqrt(1/(2*fitval(2))); % ps
+        FWHM(ii,jj) = sqrt(log(2)/fitval(2)); % pulse width, ps
 
         % Lifetime assignment logic - want lifetime1 to be shorter
         if 1/fitval(4) < 1/fitval(6)
@@ -170,9 +182,8 @@ for ii=1:imagesize(1)
             end
         end
 
-        % Lifetime assignment logic 2 - if only one lifetime floated, put
-        % in lifetime1
-        if lb(6) == ub(6) % if lifetime is held constant
+        % Lifetime assignment logic 2 - constrained lifetime -> lifetime2
+        if lb(6) == ub(6) % if only one lifetime floated, put in lifetime1
             if 1/fitval(4) < 1e2
                 lifetime1(ii,jj) = 1/fitval(4); % ps
             else
@@ -196,65 +207,58 @@ for ii=1:imagesize(1)
                 lifetime1(ii,jj) = 0; % ps
             end
         end
+        
+        if showfits == 1
+            % Plot fits
+            figure; tiledlayout(3,2); nexttile([1 1]); plot(base,t,signal,exclude1);
+            xlabel('Time (ps)'); ylabel('Signal (AU)'); nexttile([1 1]);
+            plot(t,signal,'r*'); hold on; plot(tint,sigint,'bo'); hold off
+            legend('Data','Interpolation'); xlabel('Time (ps)'); ylabel('Signal (AU)')
+            nexttile([1 2]); plot(t, signal, 'o', tint, fitcurve, '-');
+            xlabel('Time (ps)'); ylabel('Signal (AU)');
+            legend('Data','Fit'); nexttile([1 2]); plot(tint, resid)
+            legend('Residuals'); xlabel('Time (ps)'); ylabel('Residuals (AU)');
+        end
     end
 end
 
-% Save data
-Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,[])
+if savedatayn == 1
+    % Save data
+    Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,[])
+else
+    disp('Test run completed');
+end
 
-%% Checking out problematic fits
-jj = 14; % x-value in Fiji
-ii = 38; % y-value in Fiji
+%% Inspecting problematic fits
+jj = 7; % x-value in Fiji
+ii = 49; % y-value in Fiji
 
-t = zeros([length(x),1]);
-t(:) = (x(:)-x(t0index))*4/cmmps; % time vector in ps
+% Set up vectors
 signal = squeeze(data(ii,jj,:)); % pulls sweep data as vector
-
-% Baseline fitting - fit first 10% and last 5%
-cut = length(t)*0.05;
-tlow = t(2*ceil(cut)); % xlow as 10th %ile
-thigh = t(end-ceil(cut)); % xhigh as 95th %ile
-
-% Setup excluded points for baseline fitting
-excludeDupes = zeros(size(t));
-for i = 1:length(t)
-    if t(i) > tlow && t(i) < thigh
-        excludeDupes(i) = i;
-    end
-end
-
-% Remove duplicates from exclude list
-excludeunique = unique(excludeDupes(:).'); % adding the .' transposes it into a row vector
-exclude1 = nonzeros(excludeunique); % isolate nonzero data positions to exclude
+sigamp = max(signal)-min(signal); % used for Gaussian amplitude
 
 % Fit baseline
 base = fit(t,signal,'poly1','Exclude',exclude1); % fit baseline
 basecoef = coeffvalues(base); % save coeff values
-        
-% Make odd-length tconv for convolution
-if mod(length(t),2) == 0 % if t is even
-    t(length(t)+1) = t(end) + abs(t(end)-t(end-1)); % add a value to t
-    signal(length(signal)+1) = signal(end); % add a value to signal
-end
-tconv = t(1:2:end); % pulls odd values of t
 
 % Define error function as fit (parameter vector r) minus signal
-fun = @(r) conv(exp(-r(2)*(tconv-r(1)).^2), ...
-    r(3)*exp(-r(4)*(tconv-r(1)))+r(5)*exp(-r(6)*(tconv-r(1)))+ ...
-    r(7)*exp(-r(8)*(tconv-r(1))).*cos(r(9)*tconv-r(10))+ ...
-    r(11)*exp(-r(12)*(tconv-r(1))).*cos(r(13)*tconv-r(14))+ ...
-    r(15)*exp(-r(16)*(tconv-r(1))).*cos(r(17)*tconv-r(18)))+ ...
-    r(19)*t+r(20)-signal;
+fun = @(r) conv(sigamp*exp(-r(2)*(tc-r(1)).^2), ...
+    r(3)*exp(-r(4)*(tc-r(1)))+r(5)*exp(-r(6)*(tc-r(1)))+ ...
+    r(7)*exp(-r(8)*(tc-r(1))).*cos(r(9)*tc-r(10))+ ...
+    r(11)*exp(-r(12)*(tc-r(1))).*cos(r(13)*tc-r(14))+ ...
+    r(15)*exp(-r(16)*(tc-r(1))).*cos(r(17)*tc-r(18)))+ ...
+    r(19)*tint+r(20)-sigint;
 
 % Initial guesses for r
+% Gaussian terms
 cent = 0; % r(1), ps -- center
-gwid = 0.1; % r(2), ps^-2 -- Gaussian width
-eamp1 = 1e-3; % r(3) -- amplitude 1
+gdec = 4*log(2)/(4^2); % r(2), ps^-2 -- Gaussian decay
+
+% Exponential terms
+eamp1 = 1e-5; % r(3) -- amplitude 1
 edec1 = 1/2; % r(4), ps^-1 -- 1/lifetime 1
-eamp11 = 1e-4; % r(5)  -- amplitude 1.1
+eamp11 = 1e-3; % r(5)  -- amplitude 1.1
 edec11 = 1/10; % r(6), ps^-1  -- 1/lifetime 1.1
-slope = basecoef(1); % slope from baseline fit
-intercept = basecoef(2); % intercept from baseline fit
 
 % Beating terms - can use 0.1, 0.1, 0.5, 0 for beating initial guesses
 eamp2 = 0; % r(7) -- amplitude 2 (beat 1)
@@ -270,22 +274,26 @@ edec4 = 0; % r(16), ps^-1 -- 1/lifetime 4 (beat 3)
 fr3 = 0; % r(17), rad ps^-1 -- beat freq 3
 phs3 = 0; % r(18), rad -- beat phase 3
 
+% Baseline terms
+slope = basecoef(1); % r(19), slope from baseline fit
+intercept = basecoef(2); % r(20), intercept from baseline fit
+
 % Fit setup
-r0 = [cent,gwid,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
+r0 = [cent,gdec,eamp1,edec1,eamp11,edec11,... % Gaussian and exp decays
     eamp2,edec2,fr1,phs1,... % first beating term
     eamp3,edec3,fr2,phs2... % second beating term
     eamp4,edec4,fr3,phs3,... % third beating term
     slope,intercept];
-lb = [-10,0,0,0,0,1/3.6,... % lower bounds
+lb = [-10,0,0,0,0,0,... % lower bounds
     0,0,0,-180,...
     0,0,0,-180,...
     0,0,0,-180,...
-    basecoef(1),basecoef(2)];
-ub = [20,9,9,9,9,1/3.6,... % upper bounds
+    slope,intercept];
+ub = [20,9,9,9,9,9,... % upper bounds - eamp11=0 for monoexp
     0,9,9,180,... % set first value to 0 to mute beating
     0,9,9,180,... % set first value to 0 to mute beating
     0,9,9,180,... % set first value to 0 to mute beating
-    basecoef(1),basecoef(2)];
+    slope,intercept];
 
 % Option to fit or just plot initial guesses
 fityn = 1; % 1 = do fitting, 0 = plot initial guesses
@@ -307,29 +315,82 @@ else
 end
 
 % Generate curve for fitted parameters
-fitcurve = conv(exp(-fitval(2)*(tconv-fitval(1)).^2), ...
-    fitval(3)*exp(-fitval(4)*(tconv-fitval(1)))+ ...
-    fitval(5)*exp(-fitval(6)*(tconv-fitval(1)))+ ...
-    fitval(7)*exp(-fitval(8)*(tconv-fitval(1))).* ...
-    cos(fitval(9)*tconv-fitval(10))+ ...
-    fitval(11)*exp(-fitval(12)*(tconv-fitval(1))).* ...
-    cos(fitval(13)*tconv-fitval(14))+ ...
-    fitval(15)*exp(-fitval(16)*(tconv-fitval(1))).* ...
-    cos(fitval(17)*tconv-fitval(18)))+...
-    fitval(19)*t+fitval(20);
+fitcurve = conv(sigamp*exp(-fitval(2)*(tc-fitval(1)).^2), ...
+    fitval(3)*exp(-fitval(4)*(tc-fitval(1)))+ ...
+    fitval(5)*exp(-fitval(6)*(tc-fitval(1)))+ ...
+    fitval(7)*exp(-fitval(8)*(tc-fitval(1))).* ...
+    cos(fitval(9)*tc-fitval(10))+ ...
+    fitval(11)*exp(-fitval(12)*(tc-fitval(1))).* ...
+    cos(fitval(13)*tc-fitval(14))+ ...
+    fitval(15)*exp(-fitval(16)*(tc-fitval(1))).* ...
+    cos(fitval(17)*tc-fitval(18)))+...
+    fitval(19)*tint+fitval(20);
 
-% Calculate residuals, lifetimes, and Gaussian FWHM
-resid = signal-fitcurve;
-lifetime1(ii,jj) = 1/fitval(4); % ps
-lifetime2(ii,jj) = 1/fitval(6); % ps
-FWHM = 2*log(2)*sqrt(1/(2*fitval(2))); % ps
+% Calculate residuals, ssresid, and IRF FWHMs
+resid = sigint-fitcurve;
+ssresid(ii,jj) = sum(resid.^2);
+FWHM(ii,jj) = sqrt(log(2)/fitval(2)); % pulse width, ps
 
-% Plot data & fit with residuals below
-figure; tiledlayout(2,2); nexttile([1 2]) % top panel
-hold on; plot(t,signal,'o'); plot(t,fitcurve,'-'); hold off
-legend('Data','Fit'); xlabel('Time (ps)'); ylabel('Signal (AU)')
-nexttile([1 2]); plot(t,resid) % bottom panel        
-legend('Residuals'); xlabel('Time (ps)'); ylabel('Residuals (AU)')
+% Lifetime assignment logic - want lifetime1 to be shorter
+if 1/fitval(4) < 1/fitval(6)
+    if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
+        lifetime1(ii,jj) = 1/fitval(4); % ps
+    else
+        lifetime1(ii,jj) = 0; %
+    end
+    if 1/fitval(6) < 1e2
+        lifetime2(ii,jj) = 1/fitval(6); % ps
+    else
+        lifetime2(ii,jj) = 0; % ps
+    end
+else % means 1/fitval(6) is shorter --> swap lifetime1 and 2
+    if 1/fitval(4) < 1e2
+        lifetime2(ii,jj) = 1/fitval(4); % ps
+    else
+        lifetime2(ii,jj) = 0; %
+    end
+    if 1/fitval(6) < 1e2
+        lifetime1(ii,jj) = 1/fitval(6); % ps
+    else
+        lifetime1(ii,jj) = 0; % ps
+    end
+end
+
+% Lifetime assignment logic 2 - constrained lifetime -> lifetime2
+if lb(6) == ub(6) % if only one lifetime floated, put in lifetime1
+    if 1/fitval(4) < 1e2
+        lifetime1(ii,jj) = 1/fitval(4); % ps
+    else
+        lifetime1(ii,jj) = 0; %
+    end
+    if 1/fitval(6) < 1e2
+        lifetime2(ii,jj) = 1/fitval(6); % ps
+    else
+        lifetime2(ii,jj) = 0; % ps
+    end
+end
+if lb(4) == ub(4) % if only one lifetime floated, put in lifetime1
+    if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
+        lifetime2(ii,jj) = 1/fitval(4); % ps
+    else
+        lifetime2(ii,jj) = 0; %
+    end
+    if 1/fitval(6) < 1e2 % only keep reasonable values < 100 ps
+        lifetime1(ii,jj) = 1/fitval(6); % ps
+    else
+        lifetime1(ii,jj) = 0; % ps
+    end
+end
+
+% Verify fits
+figure; tiledlayout(3,2); nexttile([1 1]); plot(base,t,signal,exclude1);
+xlabel('Time (ps)'); ylabel('Signal (AU)'); nexttile([1 1]);
+plot(t,signal,'r*'); hold on; plot(tint,sigint,'bo'); hold off
+legend('Data','Interpolation'); xlabel('Time (ps)'); ylabel('Signal (AU)')
+nexttile([1 2]); plot(t, signal, 'o', tint, fitcurve, '-');
+xlabel('Time (ps)'); ylabel('Signal (AU)');
+legend('Data','Fit'); nexttile([1 2]); plot(tint, resid)
+legend('Residuals'); xlabel('Time (ps)'); ylabel('Residuals (AU)');
 
 
 %% Functions
