@@ -2,6 +2,7 @@
 %%% initially written from fit_temporal_v3
 %%% v2 - added lifetime parsing logic
 %%% v3 - updated based on fit_temporal_v5
+%%% v4 - updated based on fit_temporal_v6
 
 clear; clc; close all; warning off;
 % Load data
@@ -12,9 +13,10 @@ imagesize = size(data); % x by y by z -- x by y images, z is temporal
 % Image to save to
 tiffname = 'biexp_lifetimes_FOV1.tif';
 
-% Test subset of image
-testsubset = 1; % 1 = do a test run, other = full processing
+% Test-run on subset of image
+testsubset = 1; % 1 = do a test run, 0 = full processing
 subsize = 2; % size of subset for test run
+
 if testsubset == 1
     imagesize(1) = subsize; imagesize(2) = subsize; % pick subset of image
     showfits = 1; % show individual temporal fits
@@ -25,8 +27,8 @@ else
 end
 
 % Matrices to write data to
-lifetime1 = zeros([imagesize(1) imagesize(2)]);
-lifetime2 = lifetime1; ssresid = lifetime1; FWHM = lifetime1;
+FWHM = zeros([imagesize(1) imagesize(2)]);
+lifetime2 = FWHM; ssresid = FWHM; lifetime1 = FWHM; tss = FWHM; r2 = FWHM;
 
 % Estimating t0 index by peak
 cmmps = 299792458*1E3*1E-12; % c in mm/ps
@@ -154,7 +156,9 @@ for ii=1:imagesize(1)
         
         % Calculate residuals, ssresid, and IRF FWHMs
         resid = sigint-fitcurve;
-        ssresid(ii,jj) = sum(resid.^2);
+        ssresid(ii,jj) = sum(resid.^2); % sum of squares of residuals
+        tss(ii,jj) = sum((sigint-mean(sigint)).^2); % total sum of squares
+        r2(ii,jj) = 1-(ssresid(ii,jj)/tss(ii,jj)); % coefficient of determination (R^2)
         FWHM(ii,jj) = sqrt(log(2)/fitval(2)); % pulse width, ps
 
         % Lifetime assignment logic - want lifetime1 to be shorter
@@ -224,18 +228,22 @@ end
 
 if savedatayn == 1
     % Save data
-    Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,[])
+    Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,r2)
 else
     disp('Test run completed');
 end
 
+%% Save data manually
+Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,r2)
+
 %% Inspecting problematic fits
-jj = 7; % x-value in Fiji
-ii = 49; % y-value in Fiji
+jj = 17; % x-value in Fiji
+ii = 5; % y-value in Fiji
 
 % Set up vectors
 signal = squeeze(data(ii,jj,:)); % pulls sweep data as vector
 sigamp = max(signal)-min(signal); % used for Gaussian amplitude
+sigint = spline(t, signal, tint); % interpolate signal
 
 % Fit baseline
 base = fit(t,signal,'poly1','Exclude',exclude1); % fit baseline
@@ -325,64 +333,66 @@ fitcurve = conv(sigamp*exp(-fitval(2)*(tc-fitval(1)).^2), ...
     fitval(15)*exp(-fitval(16)*(tc-fitval(1))).* ...
     cos(fitval(17)*tc-fitval(18)))+...
     fitval(19)*tint+fitval(20);
-
+        
 % Calculate residuals, ssresid, and IRF FWHMs
 resid = sigint-fitcurve;
-ssresid(ii,jj) = sum(resid.^2);
-FWHM(ii,jj) = sqrt(log(2)/fitval(2)); % pulse width, ps
+ssresidind = sum(resid.^2);
+tssind = sum((sigint-mean(sigint)).^2); % total sum of squares
+r2ind = 1-(ssresidind/tssind); % coefficient of determination (R^2)
+FWHMind = sqrt(log(2)/fitval(2)); % pulse width, ps
 
 % Lifetime assignment logic - want lifetime1 to be shorter
 if 1/fitval(4) < 1/fitval(6)
     if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
-        lifetime1(ii,jj) = 1/fitval(4); % ps
+        lifetime1ind = 1/fitval(4); % ps
     else
-        lifetime1(ii,jj) = 0; %
+        lifetime1ind = 0; %
     end
     if 1/fitval(6) < 1e2
-        lifetime2(ii,jj) = 1/fitval(6); % ps
+        lifetime2ind = 1/fitval(6); % ps
     else
-        lifetime2(ii,jj) = 0; % ps
+        lifetime2ind = 0; % ps
     end
 else % means 1/fitval(6) is shorter --> swap lifetime1 and 2
     if 1/fitval(4) < 1e2
-        lifetime2(ii,jj) = 1/fitval(4); % ps
+        lifetime2ind = 1/fitval(4); % ps
     else
-        lifetime2(ii,jj) = 0; %
+        lifetime2ind = 0; %
     end
     if 1/fitval(6) < 1e2
-        lifetime1(ii,jj) = 1/fitval(6); % ps
+        lifetime1ind = 1/fitval(6); % ps
     else
-        lifetime1(ii,jj) = 0; % ps
+        lifetime1ind = 0; % ps
     end
 end
 
 % Lifetime assignment logic 2 - constrained lifetime -> lifetime2
 if lb(6) == ub(6) % if only one lifetime floated, put in lifetime1
     if 1/fitval(4) < 1e2
-        lifetime1(ii,jj) = 1/fitval(4); % ps
+        lifetime1ind = 1/fitval(4); % ps
     else
-        lifetime1(ii,jj) = 0; %
+        lifetime1ind = 0; %
     end
     if 1/fitval(6) < 1e2
-        lifetime2(ii,jj) = 1/fitval(6); % ps
+        lifetime2ind = 1/fitval(6); % ps
     else
-        lifetime2(ii,jj) = 0; % ps
+        lifetime2ind = 0; % ps
     end
 end
 if lb(4) == ub(4) % if only one lifetime floated, put in lifetime1
     if 1/fitval(4) < 1e2 % only keep reasonable values < 100 ps
-        lifetime2(ii,jj) = 1/fitval(4); % ps
+        lifetime2ind = 1/fitval(4); % ps
     else
-        lifetime2(ii,jj) = 0; %
+        lifetime2ind = 0; %
     end
     if 1/fitval(6) < 1e2 % only keep reasonable values < 100 ps
-        lifetime1(ii,jj) = 1/fitval(6); % ps
+        lifetime1ind = 1/fitval(6); % ps
     else
-        lifetime1(ii,jj) = 0; % ps
+        lifetime1ind = 0; % ps
     end
 end
 
-% Verify fits
+% Inspect fit
 figure; tiledlayout(3,2); nexttile([1 1]); plot(base,t,signal,exclude1);
 xlabel('Time (ps)'); ylabel('Signal (AU)'); nexttile([1 1]);
 plot(t,signal,'r*'); hold on; plot(tint,sigint,'bo'); hold off
