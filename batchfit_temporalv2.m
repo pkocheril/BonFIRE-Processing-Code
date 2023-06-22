@@ -1,5 +1,6 @@
 %%% Batch processing and fitting of .txt files and .tif solution files
 %%% initially written from fit_temporal_v6
+%%% v2 - improved general filename handling
 
 % Initialize
 clear; clc; close all; warning off;
@@ -10,10 +11,10 @@ writeindyn = 0; % 1 = write individual _proc.dat files, 0 = not
 writebatchyn = 0; % 1 = write batch_processed file, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 fileexts = 2; % 1 = .txt, 2 = .tif with Tlist in folder
-filenameconv = 2;
+filenameconv = 0; % 0 = other
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-
-% [chopper]-[PMTBW]-[etc].txt,
-% 2 = [FOV]_[size]_[idler]_[DFG]_[power]_[channel].tif
+% [chopper]-[PMTBW]-[etc],
+% 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 
 % Analysis options
 DFGyn = 0; % 1 = IR from DFG, 0 = IR from idler
@@ -433,7 +434,11 @@ for ii = 1:totalfilesN % ii = subfolder number
     
             % Setup batch table labels (must be unique)
             filename = char(folderinfo(end));
-            tablename = filename(end-40:end-4); % need char to be able to trim by position
+            if length(filename) >= 41
+                tablename = filename(end-40:end-4); % need char to be able to trim by position
+            else
+                tablename = filename(1:end-4);
+            end
             bookname = "Info_" + string(ii) + "_" + string(jj) + "_" + ...
                 string(tablename); % need quotes to make a string
             valuename = "Value_" + string(ii) + "_" + string(jj) + "_" + ...
@@ -447,19 +452,20 @@ for ii = 1:totalfilesN % ii = subfolder number
             oldnames = ["bookkeeping","values","tint","sigint","fitcurve"]; 
             newnames = [bookname, valuename, tname, signame, fitname];
     
-            % Combine processed data into one batch table
-            TF = isempty(Table2);
-            if TF == 1 % for the first dataset
-                Table2 = strings(length(tint),5*numdatafiles);
-                Table2 = table(Table2,bookkeeping,values,tint,sigint,fitcurve);
-                Table2(:,1) = []; % remove empty first column from table
-                % Rename variables to be unique by filename
-                Table2 = renamevars(Table2,oldnames,newnames);
-            else % for successive datasets
-                %Table2 = table(Table2,bookkeeping,x,corrnormDC,corrnormAC);
-                datatable = table(bookkeeping,values,tint,sigint,fitcurve);
-                Table2 = [Table2 datatable]; % append new data to previous
-                Table2 = renamevars(Table2,oldnames,newnames);
+            if writebatchyn == 1 % combine processed data into one table
+                TF = isempty(Table2);
+                if TF == 1 % for the first dataset
+                    Table2 = strings(length(tint),5*numdatafiles);
+                    Table2 = table(Table2,bookkeeping,values,tint,sigint,fitcurve);
+                    Table2(:,1) = []; % remove empty first column from table
+                    % Rename variables to be unique by filename
+                    Table2 = renamevars(Table2,oldnames,newnames);
+                else % for successive datasets
+                    %Table2 = table(Table2,bookkeeping,x,corrnormDC,corrnormAC);
+                    datatable = table(bookkeeping,values,tint,sigint,fitcurve);
+                    Table2 = [Table2 datatable]; % append new data to previous
+                    Table2 = renamevars(Table2,oldnames,newnames);
+                end
             end
         end
     end
