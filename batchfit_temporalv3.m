@@ -1,17 +1,18 @@
 %%% Batch processing and fitting of .txt files and .tif solution files
 %%% initially written from fit_temporal_v6
 %%% v2 - improved general filename handling
+%%% v3 - added lifetime sorting logic from image_fit_temporal_v4
 
 % Initialize
 clear; clc; close all; warning off;
 
 % Configuration options
-testrunyn = 0; % 1 = do a test run with a few files, 0 = process all
+testrunyn = 1; % 1 = no-save test run with a few files, 0 = process all
 writeindyn = 0; % 1 = write individual _proc.dat files, 0 = not
 writebatchyn = 0; % 1 = write batch_processed file, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 fileexts = 2; % 1 = .txt, 2 = .tif with Tlist in folder
-filenameconv = 0; % 0 = other
+filenameconv = 2; % 0 = other
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-
 % [chopper]-[PMTBW]-[etc],
 % 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
@@ -349,21 +350,36 @@ for ii = 1:totalfilesN % ii = subfolder number
                 cos(fitval(17)*tc-fitval(18)))+...
                 fitval(19)*tint+fitval(20);
             
-            % Calculate residuals, ssresid, IRF FWHM, and lifetimes
+            % Calculate residuals, ssresid, and IRF FWHM
             resid = sigint-fitcurve;
             ssresid = sum(resid.^2); % sum of squares of residuals
             tss = sum((sigint-mean(sigint)).^2); % total sum of squares
             r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
             FWHM = sqrt(log(2)/fitval(2)); % pulse width, ps
-            if fitval(4) ~= 0
-                lifetime1 = 1/fitval(4); % ps
-            else
-                lifetime1 = 0;
-            end
-            if fitval(6) ~= 0
-                lifetime2 = 1/fitval(6); % ps
-            else
-                lifetime2 = 0;
+            
+            % Lifetime calculation - want lifetime1 < lifetime2
+            if abs(1/fitval(4)) < abs(1/fitval(6))
+                if fitval(4) ~= 0 % could be 0 from fit type options
+                    lifetime1 = 1/fitval(4);
+                else
+                    lifetime1 = 0;
+                end
+                if fitval(6) ~= 0
+                    lifetime2 = 1/fitval(6);
+                else
+                    lifetime2 = 0;
+                end
+            else        % means 1/fitval(4) is longer
+                if fitval(4) ~= 0
+                    lifetime2 = 1/fitval(4);
+                else
+                    lifetime2 = 0;
+                end
+                if fitval(6) ~= 0
+                    lifetime1 = 1/fitval(6);
+                else
+                    lifetime1 = 0;
+                end
             end
             
             if isempty(values) == 0
