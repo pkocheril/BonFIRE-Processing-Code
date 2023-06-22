@@ -2,9 +2,11 @@
 %%% initially written from fit_temporal_v6
 %%% v2 - improved general filename handling
 %%% v3 - added lifetime sorting logic from image_fit_temporal_v4
+%%% v4 - improved file writeout (batch and individual) -- in progress
+%%% -- replaced by sweep_process
 
 % Initialize
-clear; clc; close all; warning off;
+clear; clc; close all;
 
 % Configuration options
 testrunyn = 1; % 1 = no-save test run with a few files, 0 = process all
@@ -51,20 +53,6 @@ end
 D = pwd; % get current directory
 S = dir(fullfile(D,'*')); % search current directory
 N = setdiff({S([S.isdir]).name},{'.','..'}); % subfolders of D
-numdatafiles = 0;
-for ii = 1:numel(N) % loop to figure out total number of files
-    if fileexts == 1
-        datafilelist = dir(fullfile(D,N{ii},'*.txt'));
-    end
-    if fileexts == 2
-        if fitAC == 0
-            datafilelist = dir(fullfile(D,N{ii},'*CH1.tif'));
-        else
-            datafilelist = dir(fullfile(D,N{ii},'*CH2.tif'));
-        end
-    end
-    numdatafiles = numdatafiles + length(datafilelist);
-end
 
 if testrunyn == 1 % limit test run to 3 folders
     totalfilesN = 3;
@@ -488,7 +476,7 @@ for ii = 1:totalfilesN % ii = subfolder number
 end
 
 if writebatchyn == 1 % write out all data to one txt file
-    writetable(Table2,'batch_fit.txt');
+    writetable(Table2,'batch_fitv4.txt');
 end
 
 %% Load batch-processed data
