@@ -11,12 +11,14 @@
 % .tif data), consolidated inspecting single files with batch processing,
 % added lifetime amplitude comparison
 %%% v6 - added trimfirstT for multi-FOV BLIM (piezostage stabilization)
+%%% v7 - changed trimfirst/lastT to allow user-defined number of points,
+% added photobleach correction (not good)
 
 % Initialize
 clear; clc; close all;
 
 % Configuration options - check before running!
-testrun = 2; % 0 = process all, 1 = no-save test run with a few files,
+testrun = 1; % 0 = process all, 1 = no-save test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
 targetfolders = []; % indices of folders to process, [] = dialog
@@ -26,28 +28,27 @@ filenameconv = 3; % 0 = other
 % [chopper]-[PMTBW]-[etc],
 % 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
-t0pos = []; % specify t0 position (mm), [] = autofind
+t0pos = 225.3; % specify t0 position (mm), [] = autofind
+aligntimedelay = 0; % 1 = align time delay for probe sweeps, 0 = not
 pairedDCAC = 1; % 1 = both DC and AC files present and paired, 0 = only AC
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 DFGyn = 1; % 1 = IR from DFG, 0 = IR from idler
-powernormyn = 2; % 2 = normalize by probe and IR powers, 
-% 1 = normalize by IR power, 0 = no normalization
+powernormyn = 3; % 0 = no normalization, 1 = normalize by IR power,
+% 2 = normalize by probe and IR powers, 3 = normalize & photobleach correct
 tempmod = 1; % 1 = temporal modulation in place, 0 = no beamsplitters
 ND = 1; % ND filter strength in probe path (script will update if possible)
 prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
 normprobepower = 1.5; % probe power on-sample to normalize to (default 1.5)
-trimlastT = 1; % 1 = remove last delay position (if sent back to start)
-% 0 = retain last delay position (default)
-trimfirstT = 0; % 1 = remove first delay (piezostage stabilization)
-% 0 = retain last delay position (default)
-basefittype = 1; % 2 = exponential baseline fit,
-% 1 = linear baseline fit, 0 = no baseline fit
-cutlow = 0.10; % lower baseline fit cutoff, (default 10th %ile)
+trimlastT = 1; % how many points to remove from end of Tlist (default 0)
+trimfirstT = 0; % points to remove from start of Tlist (default 0)
+basefittype = 1; % 0 = no baseline fit, 1 = linear baseline fit,
+% 2 = exponential baseline fit
+cutlow = 0.03; % lower baseline fit cutoff, (default 10th %ile)
 cuthigh = 0.90; % upper baseline fit cutoff, (default 90th %ile)
-ltfittype = 2; % 0 = no lifetime fitting, 1 = Gaussian*monoexp,
+ltfittype = 0; % 0 = no lifetime fitting, 1 = Gaussian*monoexp,
 % 2 = Gaussian*biexp, 3 = beating Gaussian*exp, 4 = beating Gaussian*biexp
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
@@ -78,6 +79,9 @@ if testrun > 0  % setup test run conditions
     else
         folders = targetfolders;
     end
+    if powernormyn > 2 % don't do photobleach correction
+        powernormyn = 2;
+    end
 else % not a test run
     visibility = 'off'; % hide figures
     if isempty(targetfolders) == 0 % if target folders are specified
@@ -87,8 +91,11 @@ else % not a test run
     end
 end
 
-if filetype == 3 % don't write individual figures for image data
-    writefigsyn = 0; 
+if filetype == 3 % for image data
+    writefigsyn = 0; % don't write individual figures
+    if powernormyn > 2 % don't do photobleach correction
+        powernormyn = 2;
+    end
 end
 
 % Pre-loop to figure out dimensions of master array
@@ -113,12 +120,10 @@ for ii = folders % pre-loop to figure out dimensions of master array
                 Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
                 x = importdata(Tlistname); % load Tlist as x
             end
-            if trimlastT == 1
-                x = x(1:end-1);
+            if x(1) == x(end) && trimlastT == 0 % if x isn't single-valued
+                trimlastT = 1; % trimming is needed
             end
-            if trimfirstT == 1
-                x = x(2:end);
-            end
+            x = x(trimfirstT+1:end-trimlastT); % cleaned up point trimming
             currentTlength = length(x);
             if ltfittype > 0 % check if raw data work for convolution fitting
                 deltax = zeros(length(x)-1,1);
@@ -136,16 +141,6 @@ for ii = folders % pre-loop to figure out dimensions of master array
             end
         end
     end
-end
-
-if maxTlength < 25 % make sure master array is large enough
-    maxTlength = 25;
-end
-
-if testrun == 2 % to examine a single file
-    [indx2,~] = listdlg('PromptString',{'Select a file to process.'},...
-    'SelectionMode','single','ListString',C);
-    targetfile = indx2;
 end
 
 % Column indices for master array
@@ -188,7 +183,17 @@ indrDCintegsd = indrintegDC+1; % 21
 indrDCsnr = indrDCintegsd+1; % 22
 indrDCsbr = indrDCsnr+1; % 23
 indrDCnoise = indrDCsbr+1; % 24
-indrDCbleach = indrDCnoise+1; % 25 - why maxTlength >= 25
+indrDCbleach = indrDCnoise+1; % 25 - minimum value of maxTlength
+
+if maxTlength < indrDCbleach % make sure master array is large enough
+    maxTlength = indrDCbleach;
+end
+
+if testrun == 2 % to examine a single file
+    [indx2,~] = listdlg('PromptString',{'Select a file to process.'},...
+    'SelectionMode','single','ListString',C);
+    targetfile = indx2;
+end
 
 % Make master array to store all data (row,column,folder,file)
 master = NaN(maxTlength,indcDCbase-3,length(folders),maxfilesinfolder);
@@ -200,6 +205,300 @@ if powernormyn > 0 % prep for power normalization
     IRpower = []; prbpower = [];
     if tempmod == 1 % pre-load beamsplitter response curve if needed
         BSdata = importdata('/Users/pkocheril/Documents/Caltech/Wei Lab/Spreadsheets/BP145B2/BP145B2.csv');
+    end
+    if powernormyn > 2 % photobleach correction
+        normarray = NaN(maxTlength,indcDCbase-3,2,numel(N));
+
+        % Loop over last 2 folders (Normalization and Photobleaching)
+        for ii=1:2
+            if filetype == 1
+                normfilelist = dir(fullfile(D,N{end-(2-ii)},'*.txt'));
+                norminfofilesraw = [];
+            else
+                normfilelist = dir(fullfile(D,N{end-(2-ii)},'*CH2*.tif'));
+                norminfofilesraw = dir(fullfile(D,N{end-(2-ii)},'*IRsweep*.txt'));
+            end
+            normfiles = {normfilelist(~[normfilelist.isdir]).name}; % norm files
+            norminfofiles = {norminfofilesraw(~[norminfofilesraw.isdir]).name}; % info files
+            if numel(normfiles) == numel(norminfofiles)
+                norminfofound = 1;
+            else
+                norminfofound = 0;
+            end
+            for jj=1:numel(normfiles)
+                F = fullfile(D,N{end-(2-ii)},normfiles{jj});
+                
+                % Filename parsing
+                folderinfo = split(F,"/"); % split path into folders
+                if filenameconv == 1 % parse .txts
+                    fileinfo = split(folderinfo(end),"-"); % split filename at "-"s
+                    prbWLstrfull = char(fileinfo(1)); % extract pump WL - "760m"
+                    prbWLstr = prbWLstrfull(1:end-1); % remove "m" suffix - "760"
+                    prbWL = sscanf(prbWLstr,'%f'); % convert to double
+                    prbpowerstrfull = char(fileinfo(2)); % extract pump power
+                    prbpowerstr = prbpowerstrfull(1:end-2); % remove "mW"
+                    prbpower = sscanf(prbpowerstr,'%f');
+                    signalWLstrfull = char(fileinfo(3)); % extract signal WL
+                    signalWLstr = signalWLstrfull(1:end-2); % remove "nm"
+                    signalWL = sscanf(signalWLstr,'%f');
+                    IRpowerstrfull = char(fileinfo(4)); % extract IR power
+                    IRpowerstr = IRpowerstrfull(1:end-2); % remove "mW"
+                    IRpower = sscanf(IRpowerstr,'%f');
+                    DFGWL = 1/((2/signalWL) - (1/1031.2)); % get DFG WL (nm)
+                    idlerWL = 1/((1/1031.2)-(1/signalWL));
+                    if DFGyn == 1
+                        IRWN = 1e7/DFGWL;
+                    else
+                        IRWN = 1e7/idlerWL;
+                    end
+                    NDstrfull = char(fileinfo(5)); % extract ND
+                    NDstr = NDstrfull(end); % remove "ND"
+                    ND = sscanf(NDstr,'%f');
+                else % parse default .tifs
+                    fileinfo = split(folderinfo(end),"_"); % split at "_"s
+                    channel = char(fileinfo(end)); % 'CH2'
+                    IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
+                    IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
+                    IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
+                    DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
+                    DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
+                    DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
+                    idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
+                    idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
+                    idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
+                    imgdim = char(fileinfo(end-4)); % '5X5'
+                    prbWL = 1; % <-- unknown from filename
+                    idlerWL = 1E7/idlerWN;
+                    signalWL = 1/((1/1031.2)-(1/idlerWL));
+                    IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    if DFGyn == 1
+                        IRWN = DFGWN;
+                    else
+                        IRWN = idlerWN;
+                    end
+                end
+                if norminfofound == 1 % parse info from IRsweep.txt files
+                    infofilename = fullfile(D,N{end-(2-ii)},norminfofiles{jj});
+                    infooptions = detectImportOptions(infofilename);
+                    infooptions = setvaropts(infooptions,'Var1','InputFormat','MM/dd/uuuu');
+                    infofiletable = readtable(infofilename,infooptions);
+                    infofile = table2array(infofiletable(:,3:end)); % cut date/time
+                    xinitial = infofile(1);
+                    xfinal = infofile(2);
+                    xsteps = infofile(3);
+                    yinitial = infofile(4);
+                    yfinal = infofile(5);
+                    ysteps = infofile(6);
+                    zinitial = infofile(7);
+                    zfinal = infofile(8);
+                    zsteps = infofile(9);
+                    tinitial = infofile(10);
+                    tfinal = infofile(11);
+                    tsteps = infofile(12);
+                    prbWL = round(infofile(13));
+                    prbpower = infofile(14);
+                    ND = infofile(15);
+                    idlerWN = round(infofile(16));
+                    DFGWN = round(infofile(17));
+                    IRpower = infofile(18);
+                    if DFGyn == 1
+                        IRWN = DFGWN;
+                    else
+                        IRWN = idlerWN;
+                    end
+                    dwelltime = infofile(19);
+                end
+        
+                % Load data
+                if filetype == 1 % load data from .txt
+                    data = importdata(F); % load data
+                    x = data(:,1); % save delay position as x
+                    if pairedDCAC == 1
+                        DC = data(:,2); % save channel 1 as DC
+                        signal = data(:,3); % save channel 2 as signal
+                    else
+                        if width(data) >= 3
+                            signal = data(:,3); % save channel 2 as signal
+                        else
+                            signal = data(:,2);
+                        end
+                        DC = zeros(height(signal),width(signal));
+                    end
+                    x = x(trimfirstT+1:end-trimlastT);
+                    DC = DC(trimfirstT+1:end-trimlastT);
+                    signal = signal(trimfirstT+1:end-trimlastT);
+                    % No standard deviation data present - write as zeros
+                    sigsds = zeros(height(signal),width(signal));
+                    if pairedDCAC == 1
+                        DCsds = zeros(height(signal),width(signal));
+                    end
+                else % load Tlist and .tif
+                    Tlistname = fullfile(D,N{end-(2-ii)},'Tlist.txt'); % current Tlist
+                    x = importdata(Tlistname); % load Tlist
+                    data = double(tiffreadVolume(F));
+                    imagesize = size(data);
+                    x = x(trimfirstT+1:end-trimlastT);
+                    data = data(:,:,trimfirstT+1:end-trimlastT);
+                    if length(x) > length(data)
+                        x = x(1:length(data));
+                    end
+                    DCdata = zeros(height(data),width(data),length(data));
+                    if filetype == 2 % average & stdev of XY data in .tif
+                        signal = squeeze(mean(data, [1 2]));
+                        sigsds = squeeze(std(data, 0, [1 2]));
+                        DC = squeeze(mean(DCdata, [1 2]));
+                        DCsds = squeeze(std(DCdata, 0, [1 2]));
+                        imagesize = size(signal);
+                    else % image data - make arrays to write outputs into
+                        r2array = zeros([imagesize(1) imagesize(2)]);
+                        lt1array = r2array; lt2array = r2array;
+                        ssresidarray = r2array; FWHMarray = r2array;
+                    end
+                end
+                
+                if filetype ~= 3 % solution data
+                    imagesize(1) = 1; imagesize(2) = 1;
+                    startiii = 1; startjjj = 1;
+                end
+        
+                for iii=startiii:imagesize(1)
+                    for jjj=startjjj:imagesize(2)
+                        if filetype == 3 % load pixel data
+                            signal = squeeze(data(iii,jjj,:));
+                            sigsds = zeros(height(signal),width(signal));
+                            if pairedDCAC == 1
+                                DC = squeeze(DCdata(iii,jjj,:));
+                                DCsds = zeros(sigsds);
+                            else
+                                DC = sigsds; DCsds = sigsds;
+                            end
+                        end
+                
+                        % Converting to time
+                        cmmps = 299792458*1E3*1E-12; % c in mm/ps
+                        t = zeros([length(x),1]);
+                        if isempty(t0pos) == 1 % guess t0 by peak
+                            indexoffset = floor(length(x)/6); % using an offset to ignore sharp decay at start
+                            [sigmax, t0index] = max(signal(indexoffset:end)); % estimating t0 by peak
+                            t(:) = (x(:)-x(t0index+indexoffset-1))*4/cmmps; % time vector in ps
+                        else % defined t0 position
+                            t(:) = (x(:)-t0pos)*4/cmmps; % time vector in ps
+                        end
+                
+                        if powernormyn > 0 % prepare for power normalization
+                            if isempty(IRpower) == 1 % if no IR power found
+                                IRpower = IRpowerset; % set to power from config
+                            end
+                            if isempty(prbpower) == 1 % if no probe power found
+                                prbpower = prbpowerset; % set to power from config
+                            end
+                            signal = signal*normIRpower/IRpower;
+                            sigsds = sigsds*normIRpower/IRpower;
+                            if pairedDCAC == 1
+                                DC = DC*70/IRpower;
+                                DCsds = DCsds*70/IRpower;
+                            end
+                            if powernormyn > 1 % IR and probe
+                                if tempmod == 1 % correct for temporal modulation
+                                    prbpower = 0.25*prbpower; % loss from pinhole, 250 mW -> 62.5 mW
+                                    transmittance = BSdata.data(prbWL,1)/100; % picoEmerald is p-polarized (horizontal)
+                                    reflectance = BSdata.data(prbWL,4)/100; % CSV in %
+                                    prbpower = transmittance*reflectance*prbpower; % 62.5 mW -> 15.6 mW
+                                end
+                                prbpower = prbpower/(10^(ND)); % ND1: 15.6 mW -> 1.56 mW
+                                signal = signal*(normprobepower/prbpower);
+                                sigsds = sigsds*(normprobepower/prbpower);
+                                if pairedDCAC == 1
+                                    DC = DC*(normprobepower/prbpower);
+                                    DCsds = DCsds*(normprobepower/prbpower);
+                                end
+                                if powernormyn > 2 % photobleach correction
+                                    % Do stuff
+                                end
+                            end
+                        end
+                        
+                        % Setup baseline fitting
+                        ilow = ceil(length(t)*cutlow); % using ceiling to round up
+                        ihigh = ceil(length(t)*cuthigh);
+                        tbase = [t(2:ilow); t(ihigh:end)]; % trimmed t
+                        sigbase = [signal(2:ilow); signal(ihigh:end)]; % trimmed signal
+                        sbr = max(signal(ilow:ihigh))/mean(signal(ihigh:end));
+                        
+                        % Baseline fitting
+                        basefit = fit(tbase,sigbase,'poly1'); % fit baseline
+                        basecoef = coeffvalues(basefit); % 1 = slope, 2 = int
+                        basecurve = polyval(basecoef,t);
+                        
+                        % Calculate peak height and integrated signal
+                        corrsig = signal - basecurve;
+                        [sigpeak,maxindex] = max(corrsig);
+                        peaksd = sigsds(maxindex);
+                        integsig = sum(corrsig);
+                        integsd = mean(sigsds,'all');
+                        corrsigbase = [corrsig(2:ilow); corrsig(ihigh:end)];
+                        noise = range(corrsigbase);
+                        basesd = std(corrsigbase);
+                        snr = sigpeak/noise;
+                        snrsweep = corrsig/noise;
+                        intsnr = sum(snrsweep);
+                        
+                        % Make figure annotation
+                        annot = {'IR = '+string(IRWN)+' cm-1','probe = '+...
+                            string(prbWL)+' nm'};
+                        annotdim = [0.35 0.6 0.2 0.2];
+                        annot(length(annot)+1) = {'Peak height = '+...
+                            string(sigpeak)};
+                        outname = string(F(1:end-4));
+                        fig = figure('visible',visibility);
+                        hold on; errorbar(t,signal,sigsds,'o')
+                        plot(tbase,sigbase,'go',t,basecurve,'-'); hold off;
+                        xlabel('Time (ps)'); ylabel('AC signal (AU)');
+                        legend('Data','Baseline data','Baseline');
+                        annotation('textbox',annotdim,'String',annot);
+                        if writefigsyn == 1
+                            saveas(fig,outname+'_proc.png')
+                        end
+        
+                        normarray(1:length(t),indct,ii,jj) = t(:);
+                        normarray(1:length(corrsig),indccorrsig,ii,jj) = corrsig(:);
+                        normarray(indrIR,indcvalue,ii,jj) = IRWN;
+                        normarray(indrprobe,indcvalue,ii,jj) = prbWL;
+                        normarray(indrsigpeak,indcvalue,ii,jj) = sigpeak;
+                        normarray(indrpeaksd,indcvalue,ii,jj) = peaksd;
+                        normarray(indrintegsig,indcvalue,ii,jj) = integsig;
+                        normarray(indrintegsd,indcvalue,ii,jj) = integsd;
+                        normarray(indrsnr,indcvalue,ii,jj) = snr;
+                        normarray(indrsbr,indcvalue,ii,jj) = sbr;
+                        normarray(indrnoise,indcvalue,ii,jj) = noise;
+                        normarray(indrbasesd,indcvalue,ii,jj) = basesd;
+                        normarray(indrintsnr,indcvalue,ii,jj) = intsnr;
+                        %normarray(indrbleach,indcvalue,ii,jj) = bleachrate;
+                        normarray(indrtlist,indcvalue,ii,jj) = length(t);
+                        %normarray(indrlifetime1,indcvalue,ii,jj) = lifetime1;
+                        %normarray(indrlifetime2,indcvalue,ii,jj) = lifetime2;
+                        %normarray(indrlt1lt2,indcvalue,ii,jj) = lt1lt2;
+                        %normarray(indrnfiles,indcvalue,ii,jj) = totalfilesC;
+                        normarray(1:length(signal),indcrawsig,ii,jj) = signal(:);
+                        %normarray(1:length(basecurve),indcsigbase,ii,jj) = basecurve(:);
+                        %normarray(1:length(snrsweep),indcsnrsweep,ii,jj) = snrsweep(:);
+                        %normarray(1:length(tint),indctint,ii,jj) = tint(:);
+                        %normarray(1:length(sigint),indcsigint,ii,jj) = sigint(:);
+                        %normarray(1:length(fitcurve),indcfitcurve,ii,jj) = fitcurve(:);
+                        %normarray(1:length(fitval),indcfitval,ii,jj) = fitval(:);
+                        %normarray(1:length(corrsig),indcncsig,ii,jj) = corrsig(:)/sigpeak;
+                        
+                        if writeprocyn == 1 % write files
+                            temp = normarray(:,:,ii,jj);
+                            writematrix(temp,outname+'_norm.dat',...
+                                'FileType','text')
+                        end
+                    end
+                end
+                prbpower = []; % clear powers for next file
+                IRpower = []; % (otherwise, normalization can compound)
+            end
+        end
     end
 end
 
@@ -377,16 +676,9 @@ for ii = folders % ii = subfolder number
                     end
                     DC = zeros(height(signal),width(signal));
                 end
-                if trimlastT == 1
-                    x = x(1:end-1);
-                    DC = DC(1:end-1);
-                    signal = signal(1:end-1);
-                end
-                if trimfirstT == 1
-                    x = x(2:end);
-                    DC = DC(2:end);
-                    signal = signal(2:end);
-                end
+                x = x(trimfirstT+1:end-trimlastT);
+                DC = DC(trimfirstT+1:end-trimlastT);
+                signal = signal(trimfirstT+1:end-trimlastT);
                 % No standard deviation data present - write as zeros
                 sigsds = zeros(height(signal),width(signal));
                 if pairedDCAC == 1
@@ -404,16 +696,9 @@ for ii = folders % ii = subfolder number
                 else
                     DCdata = zeros(height(data),width(data),length(x));
                 end
-                if trimlastT == 1
-                    x = x(1:end-1);
-                    data = data(:,:,1:end-1);
-                    DCdata = DCdata(:,:,1:end-1);
-                end
-                if trimfirstT == 1
-                    x = x(2:end);
-                    data = data(:,:,2:end);
-                    DCdata = DCdata(:,:,2:end);
-                end
+                x = x(trimfirstT+1:end-trimlastT);
+                data = data(:,:,trimfirstT+1:end-trimlastT);
+                DCdata = DCdata(:,:,trimfirstT+1:end-trimlastT);
                 if filetype == 2 % average & stdev of XY data in .tif
                     signal = squeeze(mean(data, [1 2]));
                     sigsds = squeeze(std(data, 0, [1 2]));
@@ -477,7 +762,7 @@ for ii = folders % ii = subfolder number
                             DC = DC*70/IRpower;
                             DCsds = DCsds*70/IRpower;
                         end
-                        if powernormyn == 2 % IR (70 mW) and probe (1.5 mW)
+                        if powernormyn > 1 % IR and probe
                             if tempmod == 1 % correct for temporal modulation
                                 prbpower = 0.25*prbpower; % loss from pinhole, 250 mW -> 62.5 mW
                                 transmittance = BSdata.data(prbWL,1)/100; % picoEmerald is p-polarized (horizontal)
@@ -490,6 +775,19 @@ for ii = folders % ii = subfolder number
                             if pairedDCAC == 1
                                 DC = DC*(normprobepower/prbpower);
                                 DCsds = DCsds*(normprobepower/prbpower);
+                            end
+                            if powernormyn > 2 % photobleach correction
+                                progscaling = (jj-startjj)/(totalfilesC-startjj);
+                                normpeak = normarray(indrsigpeak,indcvalue,1,ii);
+                                pbpeak = normarray(indrsigpeak,indcvalue,2,ii);
+                                photobleachloss = normpeak-pbpeak;
+                                pbcorrfactor = normpeak/(normpeak-(progscaling*photobleachloss));
+                                signal = signal*pbcorrfactor;
+                                sigsds = sigsds*pbcorrfactor;
+                                if pairedDCAC == 1
+                                    DC = DC*pbcorrfactor;
+                                    DCsds = DCsds*pbcorrfactor;
+                                end
                             end
                         end
                     end
@@ -585,7 +883,7 @@ for ii = folders % ii = subfolder number
                         if powernormyn > 0
                             IRFamp = IRpower/1e3; % IRF amplitude (~ IR power in W)
                         else
-                            IRFamp = 50/1e3;
+                            IRFamp = 50/1e3; % default to 50 mW
                         end
                     
                         % Define error function(r) as fit minus signal
@@ -785,14 +1083,10 @@ for ii = folders % ii = subfolder number
                     end
                     
                     % Prepare output filename(s)
-                    if filetype == 1
+                    if filetype > 1 && pairedDCAC == 1
+                        outname = string(F(1:end-8)) + "_DCAC";
+                    else
                         outname = string(F(1:end-4));
-                    else % filetype > 1
-                        if pairedDCAC == 1
-                            outname = string(F(1:end-8)) + "_DCAC";
-                        else
-                            outname = string(F(1:end-4));
-                        end
                     end
                     
                     % Calculate peak height and integrated signal
@@ -919,7 +1213,7 @@ for ii = folders % ii = subfolder number
                             master(indrDCbleach,indcvalue,ii,jj) = DCbleachrate;
                         end
                         
-                        if writeprocyn == 1 && testrun ~= 2 % write files
+                        if writeprocyn == 1 % write files
                             temp = master(:,:,ii,jj);
                             writematrix(temp,outname+'_proc.dat',...
                                 'FileType','text')
