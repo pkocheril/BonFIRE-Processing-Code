@@ -10,12 +10,13 @@
 %%% v5 - added parsing experimental parameters from supplemental .txts (for
 % .tif data), consolidated inspecting single files with batch processing,
 % added lifetime amplitude comparison
+%%% v6 - added trimfirstT for multi-FOV BLIM (piezostage stabilization)
 
 % Initialize
 clear; clc; close all;
 
 % Configuration options - check before running!
-testrun = 0; % 0 = process all, 1 = no-save test run with a few files,
+testrun = 2; % 0 = process all, 1 = no-save test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
 targetfolders = []; % indices of folders to process, [] = dialog
@@ -38,7 +39,9 @@ prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
 normprobepower = 1.5; % probe power on-sample to normalize to (default 1.5)
-trimlastT = 0; % 1 = remove last delay position (if sent back to start)
+trimlastT = 1; % 1 = remove last delay position (if sent back to start)
+% 0 = retain last delay position (default)
+trimfirstT = 0; % 1 = remove first delay (piezostage stabilization)
 % 0 = retain last delay position (default)
 basefittype = 1; % 2 = exponential baseline fit,
 % 1 = linear baseline fit, 0 = no baseline fit
@@ -106,17 +109,16 @@ for ii = folders % pre-loop to figure out dimensions of master array
             if filetype == 1 % load data from .txt
                 data = importdata(F); % load data
                 x = data(:,1); % save delay position as x
-                if trimlastT == 1
-                    x = x(1:end-1);
-                end
             else % load data from Tlist.txt and .tif
                 Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
-                x = importdata(Tlistname); % load Tlist
-                if trimlastT == 1
-                    x = x(1:end-1);
-                end
+                x = importdata(Tlistname); % load Tlist as x
             end
-
+            if trimlastT == 1
+                x = x(1:end-1);
+            end
+            if trimfirstT == 1
+                x = x(2:end);
+            end
             currentTlength = length(x);
             if ltfittype > 0 % check if raw data work for convolution fitting
                 deltax = zeros(length(x)-1,1);
@@ -288,7 +290,7 @@ for ii = folders % ii = subfolder number
                 infooptions = detectImportOptions(infofilename);
                 infooptions = setvaropts(infooptions,'Var1','InputFormat','MM/dd/uuuu');
                 infofiletable = readtable(infofilename,infooptions);
-                infofile = table2array(infofiletable(:,3:end)); % trim date and time
+                infofile = table2array(infofiletable(:,3:end)); % cut date/time
                 xinitial = infofile(1);
                 xfinal = infofile(2);
                 xsteps = infofile(3);
@@ -380,6 +382,11 @@ for ii = folders % ii = subfolder number
                     DC = DC(1:end-1);
                     signal = signal(1:end-1);
                 end
+                if trimfirstT == 1
+                    x = x(2:end);
+                    DC = DC(2:end);
+                    signal = signal(2:end);
+                end
                 % No standard deviation data present - write as zeros
                 sigsds = zeros(height(signal),width(signal));
                 if pairedDCAC == 1
@@ -401,6 +408,11 @@ for ii = folders % ii = subfolder number
                     x = x(1:end-1);
                     data = data(:,:,1:end-1);
                     DCdata = DCdata(:,:,1:end-1);
+                end
+                if trimfirstT == 1
+                    x = x(2:end);
+                    data = data(:,:,2:end);
+                    DCdata = DCdata(:,:,2:end);
                 end
                 if filetype == 2 % average & stdev of XY data in .tif
                     signal = squeeze(mean(data, [1 2]));
