@@ -1,4 +1,4 @@
-%%% Batch processing of 2D sweep data
+%%% Batch processing of temporal sweep data (written for 2D sweeps)
 %%% initially written from batchfit_temporal_v4
 %%% v2 - added writing to master array (4D data hypercube)
 %%% v3 - added full filename parsing and lifetime fitting from 
@@ -13,15 +13,16 @@
 %%% v6 - added trimfirstT for multi-FOV BLIM (piezostage stabilization)
 %%% v7 - changed trimfirst/lastT to allow user-defined number of points,
 % added photobleach correction (not good)
+%%% v8 - added option to adjust time delay for probe tuning
 
 % Initialize
 clear; clc; close all;
 
 % Configuration options - check before running!
-testrun = 1; % 0 = process all, 1 = no-save test run with a few files,
+testrun = 0; % 0 = process all, 1 = no-save test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
-targetfolders = []; % indices of folders to process, [] = dialog
+targetfolders = [2 3 4]; % indices of folders to process, [] = dialog
 filetype = 2; % 1 = .txt, 2 = .tif (solution), 3 = .tif (image)
 filenameconv = 3; % 0 = other
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-
@@ -29,12 +30,13 @@ filenameconv = 3; % 0 = other
 % 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 t0pos = 225.3; % specify t0 position (mm), [] = autofind
-aligntimedelay = 0; % 1 = align time delay for probe sweeps, 0 = not
+aligntD = 1; % 1 = align time delay for probe sweeps, 0 = not
+minprobe = 750; maxprobe = 880; % min and max probeWL for aligning tD
 pairedDCAC = 1; % 1 = both DC and AC files present and paired, 0 = only AC
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 DFGyn = 1; % 1 = IR from DFG, 0 = IR from idler
-powernormyn = 3; % 0 = no normalization, 1 = normalize by IR power,
+powernormyn = 2; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = normalize & photobleach correct
 tempmod = 1; % 1 = temporal modulation in place, 0 = no beamsplitters
 ND = 1; % ND filter strength in probe path (script will update if possible)
@@ -50,9 +52,10 @@ cutlow = 0.03; % lower baseline fit cutoff, (default 10th %ile)
 cuthigh = 0.90; % upper baseline fit cutoff, (default 90th %ile)
 ltfittype = 0; % 0 = no lifetime fitting, 1 = Gaussian*monoexp,
 % 2 = Gaussian*biexp, 3 = beating Gaussian*exp, 4 = beating Gaussian*biexp
-setpulsewidth = []; % define pulse width (ps) in fit, [] = float
+setpulsewidth = 2.3; % define pulse width (ps) in fit, [] = float
 ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
+annotatefigure = 1; % 1 = annotate figure (unfinished, leave as 1)
 
 D = pwd; % get current directory
 S = dir(fullfile(D,'*')); % search current directory
@@ -78,9 +81,6 @@ if testrun > 0  % setup test run conditions
         folders = targetfolders(1:3);
     else
         folders = targetfolders;
-    end
-    if powernormyn > 2 % don't do photobleach correction
-        powernormyn = 2;
     end
 else % not a test run
     visibility = 'off'; % hide figures
@@ -450,7 +450,7 @@ if powernormyn > 0 % prep for power normalization
                         annot(length(annot)+1) = {'Peak height = '+...
                             string(sigpeak)};
                         outname = string(F(1:end-4));
-                        fig = figure('visible',visibility);
+                        fig = figure('visible','off');
                         hold on; errorbar(t,signal,sigsds,'o')
                         plot(tbase,sigbase,'go',t,basecurve,'-'); hold off;
                         xlabel('Time (ps)'); ylabel('AC signal (AU)');
@@ -459,7 +459,7 @@ if powernormyn > 0 % prep for power normalization
                         if writefigsyn == 1
                             saveas(fig,outname+'_proc.png')
                         end
-        
+
                         normarray(1:length(t),indct,ii,jj) = t(:);
                         normarray(1:length(corrsig),indccorrsig,ii,jj) = corrsig(:);
                         normarray(indrIR,indcvalue,ii,jj) = IRWN;
@@ -699,6 +699,14 @@ for ii = folders % ii = subfolder number
                 x = x(trimfirstT+1:end-trimlastT);
                 data = data(:,:,trimfirstT+1:end-trimlastT);
                 DCdata = DCdata(:,:,trimfirstT+1:end-trimlastT);
+                if length(x) ~= length(data)
+                    warning('Tlist mismatch - trimming to correct')
+                    if length(x) > length(data)
+                        x = x(1:length(data));
+                    else
+                        data = data(:,:,1:length(x));
+                    end             
+                end
                 if filetype == 2 % average & stdev of XY data in .tif
                     signal = squeeze(mean(data, [1 2]));
                     sigsds = squeeze(std(data, 0, [1 2]));
@@ -748,7 +756,37 @@ for ii = folders % ii = subfolder number
                     else % defined t0 position
                         t(:) = (x(:)-t0pos)*4/cmmps; % time vector in ps
                     end
-            
+                    
+                    % Calculate t spacing
+                    deltat = zeros(length(t)-1,1); % check t spacing
+                    for i=1:length(t)-1
+                        deltat(i) = round(1e3*(t(i+1)-t(i)))/1e3;
+                    end % * had issues without rounding
+                    tspacing = unique(deltat); % length 1 <-> evenly spaced t
+
+                    if aligntD == 1 % align tD to compensate for probe tuning
+                        if length(tspacing) == 1
+                            tuningrate = 0.03; % ps/nm
+                            fulltimeoffset = tuningrate*(maxprobe-minprobe); % ps
+                            if fulltimeoffset > 0.1*(range(t))
+                                warning('Alignment failed - not enough points')
+                            else
+                                currentprobetimeoffset = tuningrate*(prbWL-minprobe); % ps
+                                alignstart = floor(currentprobetimeoffset/tspacing); % index
+                                maxalignstart = floor(fulltimeoffset/tspacing);
+                                alignend = length(t)-(maxalignstart-alignstart);
+                                alignstart = alignstart+1;
+                                t = t(alignstart:alignend);
+                                signal = signal(alignstart:alignend);
+                                sigsds = sigsds(alignstart:alignend);
+                                DC = DC(alignstart:alignend);
+                                DCsds = DCsds(alignstart:alignend);
+                            end
+                        else
+                            warning('Alignment failed - Tlist not evenly spaced')
+                        end
+                    end
+
                     if powernormyn > 0 % prepare for power normalization
                         if isempty(IRpower) == 1 % if no IR power found
                             IRpower = IRpowerset; % set to power from config
@@ -782,11 +820,25 @@ for ii = folders % ii = subfolder number
                                 pbpeak = normarray(indrsigpeak,indcvalue,2,ii);
                                 photobleachloss = normpeak-pbpeak;
                                 pbcorrfactor = normpeak/(normpeak-(progscaling*photobleachloss));
-                                signal = signal*pbcorrfactor;
-                                sigsds = sigsds*pbcorrfactor;
-                                if pairedDCAC == 1
-                                    DC = DC*pbcorrfactor;
-                                    DCsds = DCsds*pbcorrfactor;
+                                if pbcorrfactor <= 10
+                                    signal = signal*pbcorrfactor;
+                                    sigsds = sigsds*pbcorrfactor;
+                                    if pairedDCAC == 1
+                                        DC = DC*pbcorrfactor;
+                                        DCsds = DCsds*pbcorrfactor;
+                                    end
+                                else
+                                    if pbcorrfactor <= 100
+                                        warning('Large photobleaching - using log-scale correction')
+                                        signal = signal*(1+log(pbcorrfactor));
+                                        sigsds = sigsds*(1+log(pbcorrfactor));
+                                        if pairedDCAC == 1
+                                            DC = DC*(1+log(pbcorrfactor));
+                                            DCsds = DCsds*(1+log(pbcorrfactor));
+                                        end
+                                    else
+                                        warning('Massive photobleaching - correction failed')
+                                    end
                                 end
                             end
                         end
@@ -868,11 +920,7 @@ for ii = folders % ii = subfolder number
                     end
                     
                     if ltfittype > 0 % lifetime fitting
-                        deltat = zeros(length(t)-1,1); % check t spacing and length
-                        for i=1:length(t)-1
-                            deltat(i) = round(1e3*(t(i+1)-t(i)))/1e3;
-                        end % * had issues without rounding
-                        tspacing = unique(deltat); % length 1 <-> evenly spaced t
+                        % Check t spacing (even) and length (odd)
                         if length(tspacing) == 1  && mod(length(t),2) == 1
                             tint = t; sigint = signal;
                         else % interpolate for convolution
@@ -1049,37 +1097,38 @@ for ii = folders % ii = subfolder number
                     sr2 = string(sprintf('%0.3g',r2)); % round to 3 sig figs
                     slt1lt2 = string(sprintf('%0.3g',lt1lt2));
                     
-                    % Make figure annotation
-                    annot = {'IR = '+string(IRWN)+' cm-1','probe = '+...
-                        string(prbWL)+' nm'};
-                    if ltfittype > 0
-                        annotdim = [0.47 0.25 0.2 0.27]; % [posx posy sizex sizey]
-                    else
-                        annotdim = [0.35 0.6 0.2 0.2];
-                    end
-                    if pairedDCAC == 1
-                        annot(length(annot)+1) = {'bleach = '+...
-                            sDCbleachrate+' ps^{-1}'};
-                    end
-                    if ltfittype == 1
-                        annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
-                            ' ps, r^2 = '+sr2};
-                    end
-                    if ltfittype == 2
-                        annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
-                            lt2+' ps, A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
-                    end
-                    if ltfittype == 3
-                        annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
-                            ' ps, beats = '+beatstring+' cm^{-1}, r^2 = '+sr2};
-                    end
-                    if ltfittype == 4
-                        annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
-                            lt2+' ps, A_{1}/A_{2} = '+slt1lt2+', beats = '+...
-                            beatstring+' cm^{-1}, r^2 = '+sr2};
-                    end
-                    if ltfittype > 0 && r2 < 0.7
-                        annot(end) = {'Poor fit, r^2 = ' + sr2};
+                    if annotatefigure > 0 % make figure annotation
+                        annot = {'IR = '+string(IRWN)+' cm-1','probe = '+...
+                            string(prbWL)+' nm'};
+                        if ltfittype > 0
+                            annotdim = [0.47 0.25 0.2 0.27]; % [posx posy sizex sizey]
+                        else
+                            annotdim = [0.35 0.6 0.2 0.2];
+                        end
+                        if pairedDCAC == 1
+                            annot(length(annot)+1) = {'bleach = '+...
+                                sDCbleachrate+' ps^{-1}'};
+                        end
+                        if ltfittype == 1
+                            annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
+                                ' ps, r^2 = '+sr2};
+                        end
+                        if ltfittype == 2
+                            annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
+                                lt2+' ps, A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
+                        end
+                        if ltfittype == 3
+                            annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
+                                ' ps, beats = '+beatstring+' cm^{-1}, r^2 = '+sr2};
+                        end
+                        if ltfittype == 4
+                            annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
+                                lt2+' ps, A_{1}/A_{2} = '+slt1lt2+', beats = '+...
+                                beatstring+' cm^{-1}, r^2 = '+sr2};
+                        end
+                        if ltfittype > 0 && r2 < 0.7
+                            annot(end) = {'Poor fit, r^2 = ' + sr2};
+                        end
                     end
                     
                     % Prepare output filename(s)
@@ -1221,7 +1270,7 @@ for ii = folders % ii = subfolder number
                     end
                 end
             end
-            if writeprocyn == 1 & filetype == 3
+            if writeprocyn == 1 & filetype == 3 % write processed image tif
                 Save_tiff(outname+'_proc.tif',lt1array,...
                     lt2array,ssresidarray,FWHMarray,r2array)
             end
@@ -1312,11 +1361,43 @@ figvis = 'on';
 master_size = importdata('master_size.yml'); % load dimensions
 
 % To pull columns: squeeze(master(1:TL,[indexcolumn],[folder],1:NF))
-% TL = master(indrtlist,indecalue,[folder],1)
+% TL = master(indrtlist,indcalue,[folder],1)
 % NF = master(indrnfiles,indcvalue,[folder],1)
 % (1:NF optional - can also just use :)
 
 % To pull specific values: squeeze(master(indr...,indcvalue,[folder],1:NF))
+
+% Contours of signal vs t and probe at each IR freq
+time = squeeze(master(1:master(indrtlist,indcvalue,2,1),indct,2,1)).';
+probe = squeeze(master(indrprobe,indcvalue,2,1:master(indrnfiles,indcvalue,2,1)));
+csig = NaN(length(probe),length(time),3);
+csig(:,:,1) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrsig,2,:)).'; % 1500
+csig(:,:,2) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrsig,3,:)).'; % 1510
+csig(:,:,3) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrsig,4,:)).'; % 1520
+
+[t1,probe1] = meshgrid(time,probe);
+
+logsig(:,:,:) = log(abs(csig(:,:,:)));
+
+% Linear scale
+for i=1:3
+    figure;%('visible','off');
+    IRfreq = 1490+(10*i);
+    contourf(t1,probe1,csig(:,:,i)); cb=colorbar;
+    xlabel('Adjusted time delay (ps)'); ylabel('λ_{probe} (nm)');
+    cb.Label.String='Corrected signal at '+string(IRfreq)+' cm^{-1} (AU)';
+    cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
+end
+
+% Log scale
+for i=1:3
+    figure('visible','off');
+    IRfreq = 1490+(10*i);
+    contourf(t1,probe1,logsig(:,:,i)); cb=colorbar;
+    xlabel('Adjusted time delay (ps)'); ylabel('λ_{probe} (nm)');
+    cb.Label.String='Corrected signal at '+string(IRfreq)+' cm^{-1} (AU)';
+    cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
+end
 
 
 %% Functions
