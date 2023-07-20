@@ -17,6 +17,8 @@
 %%% v9 - improved time delay compensation with interpolation (and 
 % preserving full data), added normalization by initial reference scan and
 % PMT gain, converted reloading previous data to a config option
+%%% v10 - improved tuningrate accuracy
+%%% -- replaced by sweep_proc_alignv1
 
 % Initialize
 clear; clc; close all;
@@ -26,26 +28,26 @@ reloadprevious = 0; % 0 = run new analysis, 1 = reload previous analysis
 testrun = 0; % 0 = process all, 1 = no-save test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
-targetfolders = [2 3 4]; % indices of folders to process, [] = dialog
+targetfolders = [2 3 4 5 6]; % indices of folders to process, [] = dialog
 filetype = 2; % 1 = .txt, 2 = .tif (solution), 3 = .tif (image)
 filenameconv = 3; % 0 = other
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-
 % [chopper]-[PMTBW]-[etc],
 % 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
-t0pos = 225.3; % specify t0 position (mm), [] = autofind
-tuningrate = 0.03; % PicoEmerald signal t0 tuning rate (ps/nm)
+t0pos = 225.25; % specify t0 position (mm), [] = autofind
+tuningrate = 0.033; % PicoEmerald signal t0 tuning rate (ps/nm)
 minprobe = 750; maxprobe = 880; % min and max probeWL for aligning tD
 pairedDCAC = 1; % 1 = both DC and AC files present and paired, 0 = only AC
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 DFGyn = 1; % 1 = IR from DFG, 0 = IR from idler
-powernormyn = 4; % 0 = no normalization, 1 = normalize by IR power,
+powernormyn = 2; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + photobleach correction 
 % 4 = 2 + reference scan normalization, 5 = 4 + PMT gain correction
 tempmod = 1; % 1 = temporal modulation in place, 0 = no beamsplitters
 ND = 1; % ND filter strength in probe path (script will update if possible)
-PMT = 5; % PMT gain (script will update if possible)
+PMT = 4; % PMT gain (script will update if possible)
 prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
@@ -58,7 +60,7 @@ cutlow = 0.03; % lower baseline fit cutoff, (default 10th %ile)
 cuthigh = 0.90; % upper baseline fit cutoff, (default 90th %ile)
 ltfittype = 2; % 0 = no lifetime fitting, 1 = Gaussian*monoexp,
 % 2 = Gaussian*biexp, 3 = beating Gaussian*exp, 4 = beating Gaussian*biexp
-setpulsewidth = 2.3; % define pulse width (ps) in fit, [] = float
+setpulsewidth = 2.6; % define pulse width (ps) in fit, [] = float
 ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
 annotatefigure = 1; % 1 = annotate figure (unfinished, leave as 1)
@@ -66,6 +68,39 @@ annotatefigure = 1; % 1 = annotate figure (unfinished, leave as 1)
 D = pwd; % get current directory
 S = dir(fullfile(D,'*')); % search current directory
 N = setdiff({S([S.isdir]).name},{'.','..'}); % subfolders of D
+
+if testrun == 2 % to examine a single file - choose folder
+    [indx,~] = listdlg('PromptString',{'Select one folder.'},...
+    'SelectionMode','single','ListString',N);
+    targetfolders = indx;
+end
+
+if isempty(targetfolders) == 1 % dialog to select folders
+    [indx,~] = listdlg('PromptString',{'Select folders to process.'},...
+    'SelectionMode','multiple','ListString',N);
+    targetfolders = indx;
+end
+
+if testrun > 0  % setup test run conditions
+    visibility = 'on'; % show figures
+    writeprocyn = 0; % don't write batch processed files
+    writefigsyn = 0; % don't write figure files
+    if length(targetfolders) >= 3 % folder logic for test run
+        folders = targetfolders(1:3);
+    else
+        folders = targetfolders;
+    end
+    if powernormyn > 2
+        powernormyn = 2;
+    end
+else % not a test run
+    visibility = 'off'; % hide figures
+    if isempty(targetfolders) == 0 % if target folders are specified
+        folders = targetfolders;
+    else
+        folders = 1:numel(N); % all folders
+    end
+end
 
 % Column indices for master array
 indct = 1; % "indc" = column index
@@ -113,39 +148,6 @@ indrDCnoise = indrDCsbr+1; % 25
 indrDCbleach = indrDCnoise+1; % 26 - minimum value of maxTlength
 
 if reloadprevious == 0 % run new analysis
-    if testrun == 2 % to examine a single file - choose folder
-        [indx,~] = listdlg('PromptString',{'Select one folder.'},...
-        'SelectionMode','single','ListString',N);
-        targetfolders = indx;
-    end
-    
-    if isempty(targetfolders) == 1 % dialog to select folders
-        [indx,~] = listdlg('PromptString',{'Select folders to process.'},...
-        'SelectionMode','multiple','ListString',N);
-        targetfolders = indx;
-    end
-    
-    if testrun > 0  % setup test run conditions
-        visibility = 'on'; % show figures
-        writeprocyn = 0; % don't write batch processed files
-        writefigsyn = 0; % don't write figure files
-        if length(targetfolders) >= 3 % folder logic for test run
-            folders = targetfolders(1:3);
-        else
-            folders = targetfolders;
-        end
-        if powernormyn > 2
-            powernormyn = 2;
-        end
-    else % not a test run
-        visibility = 'off'; % hide figures
-        if isempty(targetfolders) == 0 % if target folders are specified
-            folders = targetfolders;
-        else
-            folders = 1:numel(N); % all folders
-        end
-    end
-    
     if filetype == 3 % for image data
         writefigsyn = 0; % don't write individual figures
         if powernormyn > 2 % don't do photobleach correction
@@ -1284,7 +1286,7 @@ if reloadprevious == 0 % run new analysis
     end
     
     if writeprocyn == 1 && filetype ~= 3 % write batch file
-        writematrix(master,'batch_flattenedv9.md','FileType','text') % backup, not very useful
+        writematrix(master,'batch_flattenedv10.md','FileType','text') % backup, not very useful
         writematrix(size(master),'master_size.yml','FileType','text')
     end
     if testrun == 0 % close background figures if not a test run
@@ -1296,7 +1298,7 @@ else % reload previously processed data
     D = pwd; % get current directory
     S = dir(fullfile(D,'*')); % search current directory
     N = setdiff({S([S.isdir]).name},{'.','..'}); % subfolders of D
-    for ii = 1:numel(N)
+    for ii = folders
         T = dir(fullfile(D,N{ii},'*_proc.dat'));
         C = {T(~[T.isdir]).name}; % all proc files
         if isempty(T) == 0
@@ -1318,7 +1320,7 @@ figvis = 'on';
 master_size = importdata('master_size.yml'); % load dimensions
 
 % To pull columns: squeeze(master(1:TL,[indexcolumn],[folder],1:NF))
-% TL = master(indrtlist,indcalue,[folder],1)
+% TL = master(indrtlist,indcvalue,[folder],1)
 % NF = master(indrnfiles,indcvalue,[folder],1)
 % (1:NF optional - can also just use :)
 
@@ -1326,55 +1328,807 @@ master_size = importdata('master_size.yml'); % load dimensions
 
 % Use 'rmmissing' to remove NaN values
 
-% Contours of signal vs t and probe at each IR freq
-time = squeeze(master(1:master(indrtlist,indcvalue,2,1),indct,2,1)).';
-probe = squeeze(master(indrprobe,indcvalue,2,1:master(indrnfiles,indcvalue,2,1)));
-csig = NaN(length(probe),length(time),3);
-csig(:,:,1) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrsig,2,:)).'; % 1500
-csig(:,:,2) = squeeze(master(1:master(indrtlist,indcvalue,3,1),indccorrsig,3,:)).'; % 1510
-csig(:,:,3) = squeeze(master(1:master(indrtlist,indcvalue,4,1),indccorrsig,4,:)).'; % 1520
+% Probe WL vectors - 1600 is twice as long
+probe1600 = squeeze(master(indrprobe,indcvalue,2,1:master(indrnfiles,indcvalue,2,1)));
+probe = squeeze(master(indrprobe,indcvalue,3,1:master(indrnfiles,indcvalue,3,1)));
 
-[t1,probe1] = meshgrid(time,probe);
+% Time delay-compensated contours
+timealign1600 = squeeze(master(1:master(indralignlength,indcvalue,2,1),indctalign,2,1));
+timealign = squeeze(master(1:master(indralignlength,indcvalue,3,1),indctalign,3,1));
 
-logsig(:,:,:) = log(abs(csig(:,:,:)));
+sigalign = NaN(master(indrnfiles,indcvalue,3,1),master(indralignlength,indcvalue,3,1),5);
 
-% Linear scale
-for i=1:3
-    figure;%('visible','off');
-    IRfreq = 1490+(10*i);
-    contourf(t1,probe1,csig(:,:,i)); cb=colorbar;
-    xlabel('Time delay (ps)'); ylabel('λ_{probe} (nm)');
-    cb.Label.String='Corrected signal at '+string(IRfreq)+' cm^{-1} (AU)';
-    cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
-end
+sigalign1600 = squeeze(master(1:master(indralignlength,indcvalue,2,1),indcsigalign,2,:)).';
 
-% % Log scale - not useful
-% for i=1:3
-%     figure('visible','off');
-%     IRfreq = 1490+(10*i);
-%     contourf(t1,probe1,logsig(:,:,i)); cb=colorbar;
-%     xlabel('Adjusted time delay (ps)'); ylabel('λ_{probe} (nm)');
-%     cb.Label.String='Corrected signal at '+string(IRfreq)+' cm^{-1} (AU)';
-%     cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
-% end
+sigalign(:,:,4) = squeeze(master(1:master(indralignlength,indcvalue,3,1),indcsigalign,3,1:master(indrnfiles,indcvalue,3,1))).'; % 1610
+sigalign(:,:,5) = squeeze(master(1:master(indralignlength,indcvalue,4,1),indcsigalign,4,1:master(indrnfiles,indcvalue,4,1))).'; % 1620
+sigalign(:,:,2) = squeeze(master(1:master(indralignlength,indcvalue,5,1),indcsigalign,5,1:master(indrnfiles,indcvalue,5,1))).'; % 1590
+sigalign(:,:,1) = squeeze(master(1:master(indralignlength,indcvalue,6,1),indcsigalign,6,1:master(indrnfiles,indcvalue,6,1))).'; % 1580
 
-% Time delay compensated contours
-timealign = squeeze(master(1:master(indralignlength,indcvalue,2,1),indctalign,2,1)).';
-sigalign = NaN(length(probe),length(timealign),3);
-sigalign(:,:,1) = squeeze(master(1:master(indralignlength,indcvalue,2,1),indcsigalign,2,:)).'; % 1500
-sigalign(:,:,2) = squeeze(master(1:master(indralignlength,indcvalue,3,1),indcsigalign,3,:)).'; % 1510
-sigalign(:,:,3) = squeeze(master(1:master(indralignlength,indcvalue,4,1),indcsigalign,4,:)).'; % 1520
+[t5,probe5] = meshgrid(timealign1600,probe1600);
+[t6,probe6] = meshgrid(timealign,probe);
 
-[t2,probe2] = meshgrid(timealign,probe);
+figure;
+contourf(t5,probe5,sigalign1600); cb=colorbar;
+xlabel('Compensated time delay (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String='Corrected signal at 1600 cm^{-1} (AU)';
+cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
 
-for i=1:3
-    figure;%('visible','off');
-    IRfreq = 1490+(10*i);
-    contourf(t2,probe2,sigalign(:,:,i)); cb=colorbar;
+for i=[1:2 4:5]
+    IRfreq = 1570+10*i;
+    figure;
+    contourf(t6,probe6,sigalign(:,:,i)); cb=colorbar;
     xlabel('Compensated time delay (ps)'); ylabel('λ_{probe} (nm)');
     cb.Label.String='Corrected signal at '+string(IRfreq)+' cm^{-1} (AU)';
     cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
 end
+
+
+% IR WN vector
+IRWNs = [1600 1610 1620 1590 1580];
+
+% Photobleaching rate as a function of probe WL (from exponential baseline)
+bleach = NaN(length(probe1600),length(IRWNs));
+for i=2:6
+    bleach(:,i-1) = squeeze(master(indrDCbleach,indcvalue,i,:));
+end
+
+% f1 = figure('visible',figvis); 
+% plot(probe1600,bleach(:,1),probe,bleach(1:66,2),probe,bleach(1:66,3),probe,bleach(1:66,4),probe,bleach(1:66,5))
+% xlabel('λ_{probe} (nm)'); ylabel('Bleach rate (ps^{-1})');
+% legend('1600 cm^{-1}','1610 cm^{-1}','1620 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+% 
+% f1x = figure('visible',figvis); 
+% hold on; yyaxis left; plot(probe,bleach(1:66,3),probe,bleach(1:66,2));
+% ylabel('Bleach rate (ps^{-1})'); yyaxis right;
+% plot(probe1600,bleach(:,1),probe,bleach(1:66,4),probe,bleach(1:66,5));
+% hold off;
+% xlabel('λ_{probe} (nm)'); ylabel('Bleach rate (ps^{-1})');
+% legend('1620 cm^{-1}','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+% bleaching seems ok now (still visible in DC up to 760 nm, but AC is fine)
+
+% -- switched to linear baseline (better for AC)
+
+% Contours of signal vs t and probe at each IR freq
+time = squeeze(master(1:master(indrtlist,indcvalue,2,1),indct,2,1)).';
+csig1600 = NaN(length(probe1600),length(time));
+snrsw1600 = csig1600;
+for i=1:length(probe1600)
+    csig1600(i,:) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrsig,2,i)).';
+    snrsw1600(i,:) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indcsnrsweep,2,i)).';
+end
+
+[t1,probe1] = meshgrid(time,probe1600);
+cont1600 = figure('visible',figvis);
+contourf(t1,probe1,csig1600); cb=colorbar;
+xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String = 'Corrected signal at 1600 cm^{-1} (AU)';
+cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% contsnr1600 = figure('visible',figvis);
+% contourf(t1,probe1,snrsw1600); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR at 1600 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% can see what looks like a Franck-Condon progression in the SNR sweep, but
+% might also just be noise (very spiky)
+
+csig = NaN(length(probe),length(time),4);
+snrsw = csig;
+for j=1:4
+    for i=1:length(probe)
+        csig(i,:,j) = squeeze(master(1:master(indrtlist,indcvalue,j+2,1),indccorrsig,j+2,i)).';
+        snrsw(i,:,j) = squeeze(master(1:master(indrtlist,indcvalue,j+2,1),indcsnrsweep,j+2,i)).';
+    end
+end
+
+[t2,probe2] = meshgrid(time,probe);
+
+cont1610 = figure('visible',figvis);
+contourf(t2,probe2,csig(:,:,1)); cb=colorbar;
+xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String = 'Corrected signal at 1610 cm^{-1} (AU)';
+cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% contsnr1610 = figure('visible',figvis);
+% contourf(t2,probe2,snrsw(:,:,1)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR at 1610 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+cont1620 = figure('visible',figvis);
+contourf(t2,probe2,csig(:,:,2)); cb=colorbar;
+xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String = 'Corrected signal at 1620 cm^{-1} (AU)';
+cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% contsnr1620 = figure('visible',figvis);
+% contourf(t2,probe2,snrsw(:,:,2)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR at 1620 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+cont1590 = figure('visible',figvis);
+contourf(t2,probe2,csig(:,:,3)); cb=colorbar;
+xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String = 'Corrected signal at 1590 cm^{-1} (AU)';
+cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% contsnr1590 = figure('visible',figvis);
+% contourf(t2,probe2,snrsw(:,:,3)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR at 1590 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+cont1580 = figure('visible',figvis);
+contourf(t2,probe2,csig(:,:,4)); cb=colorbar;
+xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+cb.Label.String = 'Corrected signal at 1580 cm^{-1} (AU)';
+cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% contsnr1580 = figure('visible',figvis);
+% contourf(t2,probe2,snrsw(:,:,4)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR at 1580 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% structure is present in all the sweeps - real?
+
+% Examining peak SNR vs probeWL (along the slant of time 0)
+
+peaksnrsw1600(:) = max(snrsw1600(:,:),[],2);
+peaksnrsw1610(:) = max(snrsw(:,:,1),[],2);
+peaksnrsw1620(:) = max(snrsw(:,:,2),[],2);
+peaksnrsw1590(:) = max(snrsw(:,:,3),[],2);
+peaksnrsw1580(:) = max(snrsw(:,:,4),[],2);
+
+% fFC = figure('visible',figvis); 
+% hold on;
+% plot(probe,peaksnrsw1610,probe1600,peaksnrsw1600,'LineWidth',2);
+% plot(probe,peaksnrsw1590,probe,peaksnrsw1580,'LineWidth',2);
+% hold off;
+% xlabel('λ_{probe} (nm)'); ylabel('Peak corrected SNR');
+% legend('1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+% Smoothing for clarity
+smoothing = 10;
+smmethod = "movmean";
+smpsnrsw1600 = smoothdata(peaksnrsw1600,smmethod,smoothing);
+smpsnrsw1610 = smoothdata(peaksnrsw1610,smmethod,smoothing);
+smpsnrsw1620 = smoothdata(peaksnrsw1620,smmethod,smoothing);
+smpsnrsw1590 = smoothdata(peaksnrsw1590,smmethod,smoothing);
+smpsnrsw1580 = smoothdata(peaksnrsw1580,smmethod,smoothing);
+% Mean smoothing with 3-point window seems to work best (features aren't
+% very broad)
+
+% fFCsm = figure('visible',figvis); 
+% hold on;
+% plot(probe,smpsnrsw1610,probe1600,smpsnrsw1600,'LineWidth',2);
+% plot(probe,smpsnrsw1590,probe,smpsnrsw1580,'LineWidth',2);
+% hold off;
+% xlabel('λ_{probe} (nm)'); ylabel('Smoothed peak corrected SNR');
+% legend('1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+% Normalizing (with an offset for clarity)
+offset = 0;
+nsmpsnrsw1600 = smpsnrsw1600/max(smpsnrsw1600)+offset*2;
+nsmpsnrsw1610 = smpsnrsw1610/max(smpsnrsw1610)+offset*3;
+nsmpsnrsw1620 = smpsnrsw1620/max(smpsnrsw1620)+offset*4;
+nsmpsnrsw1590 = smpsnrsw1590/max(smpsnrsw1590)+offset*1;
+nsmpsnrsw1580 = smpsnrsw1580/max(smpsnrsw1580)+offset*0;
+
+% fFCnsm = figure('visible',figvis); 
+% hold on;
+% plot(probe,nsmpsnrsw1610,probe1600,nsmpsnrsw1600,'LineWidth',2);
+% plot(probe,nsmpsnrsw1590,probe,nsmpsnrsw1580,'LineWidth',2);
+% hold off;
+% xlabel('λ_{probe} (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+align1610 = probe-3;
+align1600 = probe1600;
+align1590 = probe-13;
+align1580 = probe-1;
+
+%fFCalign = figure('visible',figvis); 
+%hold on;
+%plot(align1610,nsmpsnrsw1610,align1600,nsmpsnrsw1600,'LineWidth',2);
+%plot(align1590,nsmpsnrsw1590,align1580,nsmpsnrsw1580,'LineWidth',2);
+%hold off;
+%xlabel('λ_{probe} (nm)'); ylabel('Normalized peak corrected SNR');
+%legend('1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+
+% F2DVE contour - not enough points
+[w1,w2] = meshgrid(IRWNs,probe);
+
+f2dve = NaN(length(probe),length(IRWNs)); 
+f2dvesnr = f2dve; f2dveint = f2dve; f2dvesd = f2dve;
+
+for i=2:6 % folders
+    if i >= 3
+        for j=1:length(probe) % j = 1,2,3 ... 66
+            f2dve(j,i-1) = master(indrsigpeak,indcvalue,i,j);
+            f2dvesnr(j,i-1) = master(indrintsnr,indcvalue,i,j);
+            f2dveint(j,i-1) = master(indrintegsig,indcvalue,i,j);
+            f2dvesd(j,i-1) = master(indrpeaksd,indcvalue,i,j);
+        end
+    else
+        for j=1:2:length(probe1600) % j = 1,3,5, ... 131
+            f2dve((j+1)/2,i-1) = master(indrsigpeak,indcvalue,i,j);
+            f2dvesnr((j+1)/2,i-1) = master(indrintsnr,indcvalue,i,j);
+            f2dveint((j+1)/2,i-1) = master(indrintegsig,indcvalue,i,j);
+            f2dvesd((j+1)/2,i-1) = master(indrpeaksd,indcvalue,i,j);
+        end
+    end
+end
+
+%peak2dve = figure('visible',figvis);
+%contourf(w1,w2,f2dve); cb=colorbar;
+%xlabel('ω_{IR} (cm^{-1})'); ylabel('λ_{probe} (nm)');
+%cb.Label.String = 'Peak corrected signal (AU)';
+%cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+%int2dve = figure('visible',figvis);
+%contourf(w1,w2,f2dveint); cb=colorbar;
+%xlabel('ω_{IR} (cm^{-1})'); ylabel('λ_{probe} (nm)');
+%cb.Label.String = 'Integrated corrected signal (AU)';
+%cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+%snr2dve = figure('visible',figvis);
+%contourf(w1,w2,f2dvesnr); cb=colorbar;
+%xlabel('ω_{IR} (cm^{-1})'); ylabel('λ_{probe} (nm)');
+%cb.Label.String = 'Corrected SNR';
+%cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+
+% still not enough points yet for these plot to make sense (MATLAB
+% interpolates)
+
+
+% 1D sweeps - not super useful
+f2 = figure('visible',figvis);
+plot(probe,f2dve(:,3),probe,f2dve(:,2),probe,f2dve(:,1),probe,f2dve(:,4),probe,f2dve(:,5));
+xlabel('λ_{probe} (nm)'); ylabel('Peak corrected signal (AU)');
+legend('1620 cm^{-1}','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+% f3 = figure('visible',figvis);
+% plot(probe,f2dveint(:,3),probe,f2dveint(:,2),probe,f2dveint(:,1),probe,f2dveint(:,4),probe,f2dveint(:,5));
+% xlabel('λ_{probe} (nm)'); ylabel('Integrated corrected signal (AU)');
+% legend('1620 cm^{-1}','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+% 
+% f4 = figure('visible',figvis);
+% plot(probe,f2dvesnr(:,3),probe,f2dvesnr(:,2),probe,f2dvesnr(:,1),probe,f2dvesnr(:,4),probe,f2dvesnr(:,5));
+% xlabel('λ_{probe} (nm)'); ylabel('Corrected SNR');
+% legend('1620 cm^{-1}','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+
+% 1D cross-section
+%f6 = figure('visible',figvis);
+%errorbar(probe,f2dve(:,4),f2dvesd(:,4),'r');
+%xlabel('λ_{probe} (nm)'); ylabel('Peak corrected signal (AU)');
+
+% Sum-frequency alignment with UV-vis
+sf1600 = 1e7./((1e7./probe1600)+1600);
+sf1610 = 1e7./((1e7./probe)+1610);
+sf1620 = 1e7./((1e7./probe)+1620);
+sf1590 = 1e7./((1e7./probe)+1590);
+sf1580 = 1e7./((1e7./probe)+1580);
+
+Rh800tbl = readtable('Rh800.csv');
+Rh800 = table2array(Rh800tbl);
+
+% f7 = figure('visible',figvis);
+% hold on
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1610,nsmpsnrsw1610,sf1600,nsmpsnrsw1600,'LineWidth',2);
+% plot(sf1590,nsmpsnrsw1590,sf1580,nsmpsnrsw1580,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+% 
+% f8 = figure('visible',figvis);
+% hold on
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1590,nsmpsnrsw1590,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1590 cm^{-1}')
+% xlim([550,800])
+% 
+% f9 = figure('visible',figvis);
+% tiledlayout(2,2); nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1580,nsmpsnrsw1580,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1580 cm^{-1}')
+% xlim([550,800]);
+% nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1590,nsmpsnrsw1590,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1590 cm^{-1}')
+% xlim([550,800]);
+% nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1600,nsmpsnrsw1600,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1600 cm^{-1}')
+% xlim([550,800]);
+% nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1610,nsmpsnrsw1610,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1610 cm^{-1}')
+% xlim([550,800]);
+
+% Peak positions in 1590 cm-1 spectra
+A = 712.9;
+B = 709.7;
+C = 706.6;
+D = 700.3;
+E = 720.7;
+F = 730.1;
+G = 739.5;
+H = 747.2;
+
+AB = (1e7/A)-(1e7/B);
+AC = (1e7/A)-(1e7/C);
+AD = (1e7/A)-(1e7/D);
+AE = (1e7/A)-(1e7/E);
+AF = (1e7/A)-(1e7/F);
+AG = (1e7/A)-(1e7/G);
+AH = (1e7/A)-(1e7/H);
+
+% Trash figure (hard to make secondary x-axis in MATLAB)
+%figure;
+%t = tiledlayout(1,1);
+%ax1 = axes(t);
+%plot(ax1,Rh800(:,1),Rh800(:,2),'-r')
+%ax1.XColor = 'r';
+%ax1.YColor = 'r';
+%xlabel('Wavelength (nm)'); ylabel('Normalized absorbance');
+%legend('Rh800 UV-vis'); xlim([min(sf1590),max(sf1590)]);
+%ax2 = axes(t);
+%plot(ax2,probe,nsmpsnrsw1610,'-k')
+%ax2.XAxisLocation = 'top';
+%ax2.YAxisLocation = 'right';
+%ax2.Color = 'none';
+%ax1.Box = 'off';
+%ax2.Box = 'off';
+%xlabel('λ_{probe} (nm)'); ylabel('Normalized peak corrected SNR');
+%legend('1590 cm^{-1}')
+
+% 1nm steps at 1608 from 6/23/23
+prev1608 = importdata('../2023_06_23/1608snr.txt');
+sf1608 = 1e7./((1e7./prev1608(:,1))+1608);
+smpsnrsw1608 = smoothdata(prev1608(:,2),smmethod,smoothing);
+nsmpsnrsw1608 = smpsnrsw1608/max(smpsnrsw1608);
+
+% f10 = figure('visible',figvis);
+% tiledlayout(1,2); nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1610,nsmpsnrsw1610,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1610 cm^{-1}')
+% xlim([550,800]);
+% nexttile([1 1]); hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1608,nsmpsnrsw1608,'LineWidth',2);
+% hold off;
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('Rh800 UV-vis','Rh800 fluorescence','1608 cm^{-1}')
+% xlim([550,800]);
+% 
+% f11 = figure('visible',figvis);
+% plot(sf1610,nsmpsnrsw1610,sf1608,nsmpsnrsw1608,'LineWidth',2);
+% xlabel('IR+probe sum wavelength (nm)'); ylabel('Normalized peak corrected SNR');
+% legend('1610 cm^{-1}','1608 cm^{-1}')
+
+
+% Looking at noise
+
+noise1600 = squeeze(master(indrnoise,indcvalue,2,1:master(indrnfiles,indcvalue,2,1)));
+noise1610 = squeeze(master(indrnoise,indcvalue,3,1:master(indrnfiles,indcvalue,3,1)));
+noise1620 = squeeze(master(indrnoise,indcvalue,4,1:master(indrnfiles,indcvalue,4,1)));
+noise1590 = squeeze(master(indrnoise,indcvalue,5,1:master(indrnfiles,indcvalue,5,1)));
+noise1580 = squeeze(master(indrnoise,indcvalue,6,1:master(indrnfiles,indcvalue,6,1)));
+
+% f12 = figure('visible',figvis);
+% %hold on;
+% %yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% %ylabel('Normalized absorbance'); yyaxis right;
+% plot(probe,noise1610,probe1600,noise1600,probe,noise1590,probe,noise1580);
+% legend('1610','1600','1590','1580')
+% title('Noise from pre-processing')
+
+% Noise smoothing
+sm2 = 10;
+asmn1610 = smoothdata(noise1610,"movmean",sm2);
+asmn1600 = smoothdata(noise1600,"movmean",sm2);
+asmn1590 = smoothdata(noise1590,"movmean",sm2);
+asmn1580 = smoothdata(noise1580,"movmean",sm2);
+
+% % Noise fitting
+% polyfit = 'exp2';
+% allprobes = [probe1600; probe; probe; probe; probe];
+% allnoise = [noise1600; noise1610; noise1620; noise1590; noise1580];
+% 
+% noisefit = fit(allprobes,allnoise,polyfit);
+% noisecoef = coeffvalues(noisefit);
+% noisecurve = noisecoef(1)*exp(noisecoef(2)*allprobes)+noisecoef(3)*exp(noisecoef(4)*allprobes);
+% 
+% noisefit1600 = fit(probe1600,noise1600,polyfit);
+% anoisecoef1600 = coeffvalues(noisefit1600);
+% 
+% noisecoef1600 = noisecoef;
+% noisecurve1600 = noisecoef1600(1)*exp(noisecoef1600(2)*probe1600)+noisecoef1600(3)*exp(noisecoef1600(4)*probe1600);
+% 
+% noisefit1610 = fit(probe,noise1610,polyfit);
+% anoisecoef1610 = coeffvalues(noisefit1610);
+% 
+% noisecoef1610 = noisecoef;
+% noisecurve1610 = noisecoef1610(1)*exp(noisecoef1610(2)*probe)+noisecoef1610(3)*exp(noisecoef1610(4)*probe);
+% 
+% noisefit1590 = fit(probe,noise1590,polyfit);
+% anoisecoef1590 = coeffvalues(noisefit1590);
+% 
+% noisecoef1590 = noisecoef;
+% noisecurve1590 = noisecoef1590(1)*exp(noisecoef1590(2)*probe)+noisecoef1590(3)*exp(noisecoef1590(4)*probe);
+% 
+% noisefit1580 = fit(probe,noise1580,polyfit);
+% anoisecoef1580 = coeffvalues(noisefit1580);
+% 
+% noisecoef1580 = noisecoef;
+% noisecurve1580 = noisecoef1580(1)*exp(noisecoef1580(2)*probe)+noisecoef1580(3)*exp(noisecoef1580(4)*probe);
+% 
+% smn1610 = noisecurve1610;
+% smn1600 = noisecurve1600;
+% smn1590 = noisecurve1590;
+% smn1580 = noisecurve1580;
+% 
+% f12a = figure('visible',figvis);
+% plot(probe,smn1610,probe1600,smn1600,probe,smn1590,probe,smn1580);
+% legend('1610','1600','1590','1580')
+% title('Smoothed noise')
+% 
+% % Remaking SNR contour with smoothed noise
+% smsnr1600 = zeros(length(probe1600),length(time));
+% smsnr = zeros(length(probe),length(time),4);
+% for i=1:length(smn1600)
+%     smsnr1600(i,:) = csig1600(i,:)/smn1600(i);
+% end
+% 
+% for i=1:length(smn1610)
+%     smsnr(i,:,1) = csig(i,:,1)/smn1610(i);
+%     smsnr(i,:,2) = csig(i,:,2)/smn1610(i);
+%     smsnr(i,:,3) = csig(i,:,3)/smn1590(i);
+%     smsnr(i,:,4) = csig(i,:,4)/smn1580(i);
+% end
+% 
+% smcontsnr1600 = figure('visible',figvis);
+% contourf(t1,probe1,smsnr1600); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR (smoothed noise) at 1600 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% smcontsnr1610 = figure('visible',figvis);
+% contourf(t2,probe2,smsnr(:,:,1)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR (smoothed noise) at 1610 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% smcontsnr1620 = figure('visible',figvis);
+% contourf(t2,probe2,smsnr(:,:,2)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR (smoothed noise) at 1620 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% smcontsnr1590 = figure('visible',figvis);
+% contourf(t2,probe2,smsnr(:,:,3)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR (smoothed noise) at 1590 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% smcontsnr1580 = figure('visible',figvis);
+% contourf(t2,probe2,smsnr(:,:,4)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected SNR (smoothed noise) at 1580 cm^{-1}';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% % Noise by baseline standard deviation
+% cuthigh = 0.7;
+% ihigh = ceil(41*cuthigh);
+% 
+% sd1600 = NaN(length(probe1600),1); rn1600 = sd1600;
+% sd1590 = NaN(length(probe),1); sd1580 = sd1590; sd1610 = sd1590; sd1620 = sd1590;
+% rn1590 = sd1590; rn1610 = sd1610; rn1620 = sd1620; rn1580 = sd1580;
+% for i=1:height(csig1600)
+%     sd1600(i) = std(csig1600(i,ihigh:end));
+%     rn1600(i) = range(csig1600(i,ihigh:end));
+% end
+% for i=1:length(probe)
+%     sd1590(i) = std(csig(i,ihigh:end,1));
+%     sd1580(i) = std(csig(i,ihigh:end,2));
+%     sd1610(i) = std(csig(i,ihigh:end,3));
+%     sd1620(i) = std(csig(i,ihigh:end,4));
+%     rn1590(i) = range(csig(i,ihigh:end,1));
+%     rn1580(i) = range(csig(i,ihigh:end,2));
+%     rn1610(i) = range(csig(i,ihigh:end,3));
+%     rn1620(i) = range(csig(i,ihigh:end,4));
+% end
+% 
+% f13 = figure('visible',figvis);
+% hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1610,sd1610,sf1600,sd1600,sf1590,sd1590,sf1580,sd1580);
+% legend('1610','1600','1590','1580')
+% title('SD')
+% 
+% f14 = figure('visible',figvis);
+% hold on;
+% yyaxis left; plot(Rh800(:,1),Rh800(:,2),Rh800(:,3),Rh800(:,4),'Linewidth',2); 
+% ylabel('Normalized absorbance'); yyaxis right;
+% plot(sf1610,sd1610,sf1600,sd1600,sf1590,sd1590,sf1580,sd1580);
+% legend('1610','1600','1590','1580')
+% title('Range')
+
+
+% Contours of DC
+
+% cDC1600 = NaN(length(probe1600),master_size(1));
+% for i=1:length(probe1600)
+%     cDC1600(i,:) = squeeze(master(1:master(indrtlist,indcvalue,2,1),indccorrDC,2,i)).';
+% end
+% 
+% DC1600 = figure('visible',figvis);
+% contourf(t1,probe1,cDC1600); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected DC at 1600 cm^{-1} (AU)';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% cDC = NaN(length(probe),master_size(1),4);
+% for j=1:4
+%     for i=1:length(probe)
+%         cDC(i,:,j) = squeeze(master(1:master(indrtlist,indcvalue,j+2,1),indccorrDC,j+2,i)).';
+%     end
+% end
+% 
+% DC1610 = figure('visible',figvis);
+% contourf(t2,probe2,cDC(:,:,1)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected DC at 1610 cm^{-1} (AU)';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% DC1620 = figure('visible',figvis);
+% contourf(t2,probe2,cDC(:,:,2)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected DC at 1620 cm^{-1} (AU)';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% DC1590 = figure('visible',figvis);
+% contourf(t2,probe2,cDC(:,:,3)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected DC at 1590 cm^{-1} (AU)';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% DC1580 = figure('visible',figvis);
+% contourf(t2,probe2,cDC(:,:,4)); cb=colorbar;
+% xlabel('Time (ps)'); ylabel('λ_{probe} (nm)');
+% cb.Label.String = 'Corrected DC at 1580 cm^{-1} (AU)';
+% cb.Label.Rotation = 270; cb.Label.VerticalAlignment = "bottom";
+% 
+% % Peak DC
+% f2dveDC = f2dve;
+% for i=2:6 % folders
+%     if i >= 3
+%         for j=1:length(probe) % j = 1,2,3 ... 66
+%             f2dveDC(j,i-1) = master(indrDCpeak,indcvalue,i,j);
+%         end
+%     else
+%         for j=1:2:length(probe1600) % j = 1,3,5, ... 131
+%             f2dveDC((j+1)/2,i-1) = master(indrDCpeak,indcvalue,i,j);
+%         end
+%     end
+% end
+% f20 = figure('visible',figvis);
+% plot(probe,f2dveDC(:,3),probe,f2dveDC(:,2),probe,f2dveDC(:,1),probe,f2dveDC(:,4),probe,f2dveDC(:,5));
+% xlabel('λ_{probe} (nm)'); ylabel('Peak corrected DC (AU)');
+% legend('1620 cm^{-1}','1610 cm^{-1}','1600 cm^{-1}','1590 cm^{-1}','1580 cm^{-1}')
+
+
+% Checking elongation of vibrational 'lifetime' at shorter probe WLs
+f21 = figure('visible',figvis);
+hold on; plot(time,csig(1,:,3),time,csig(6,:,3),time,csig(11,:,3));
+plot(time,csig(16,:,3),time,csig(21,:,3),time,csig(26,:,3)); hold off;
+legend('750 nm','760 nm','770 nm','780 nm','790 nm','800 nm')
+xlabel('Time (ps)'); ylabel('Signal (AU)')
+
+[max750,index750] = max(csig(1,:,3));
+[max760,index760] = max(csig(6,:,3));
+[max770,index770] = max(csig(11,:,3));
+[max780,index780] = max(csig(16,:,3));
+[max790,index790] = max(csig(21,:,3));
+[max800,index800] = max(csig(26,:,3));
+
+norm750 = csig(1,1:end-3,3)/max750;
+norm760 = csig(6,1:end-3,3)/max760;
+norm770 = csig(11,2:end-2,3)/max770;
+norm780 = csig(16,3:end-1,3)/max780;
+norm790 = csig(21,3:end-1,3)/max790;
+norm800 = csig(26,4:end,3)/max800;
+tshort = time(1:end-3);
+
+lw = 1.5;
+% Red to blue gradient manually
+% f22 = figure('visible',figvis);
+% hold on; plot(tshort,norm750,'o','MarkerEdgeColor',[0 0 1],'Linewidth',lw);
+% plot(tshort,norm760,'o','MarkerEdgeColor',[0.2 0 0.8],'Linewidth',lw);
+% plot(tshort,norm770,'o','MarkerEdgeColor',[0.4 0 0.6],'Linewidth',lw);
+% plot(tshort,norm780,'o','MarkerEdgeColor',[0.6 0 0.4],'Linewidth',lw);
+% plot(tshort,norm790,'o','MarkerEdgeColor',[0.8 0 0.2],'Linewidth',lw);
+% plot(tshort,norm800,'o','MarkerEdgeColor',[1 0 0],'Linewidth',lw); 
+% hold off; legend('750 nm','760 nm','770 nm','780 nm','790 nm','800 nm'); 
+% xlabel('Adjusted time (ps)'); ylabel('Normalized signal'); 
+% xlim([0 inf]);
+
+% Re-colored with manual rainbow gradient
+f22a = figure('visible',figvis);
+hold on; plot(tshort,norm750,'o','MarkerEdgeColor',[0 0 1],'Linewidth',lw);
+plot(tshort,norm760,'o','MarkerEdgeColor',[0 0.33 0.67],'Linewidth',lw);
+plot(tshort,norm770,'o','MarkerEdgeColor',[0 0.67 0.33],'Linewidth',lw);
+plot(tshort,norm780,'o','MarkerEdgeColor',[0.33 1 0],'Linewidth',lw);
+plot(tshort,norm790,'o','MarkerEdgeColor',[0.67 0.5 0],'Linewidth',lw);
+plot(tshort,norm800,'o','MarkerEdgeColor',[1 0 0],'Linewidth',lw); 
+hold off; legend('750 nm','760 nm','770 nm','780 nm','790 nm','800 nm'); 
+xlabel('Adjusted time delay (ps)'); ylabel('Normalized signal'); 
+xlim([0 inf]);
+
+% Looking at lifetime as a function of BonFIRE band size
+lt1temp = squeeze(master(indrlifetime1,indcvalue,:,:));
+lt2temp = squeeze(master(indrlifetime2,indcvalue,:,:));
+
+lt11600 = lt1temp(2,:).';
+lt11610 = lt1temp(3,1:66).';
+lt11620 = lt1temp(4,1:66).';
+lt11590 = lt1temp(5,1:66).';
+lt11580 = lt1temp(6,1:66).';
+
+lt21600 = lt2temp(2,:).';
+lt21610 = lt2temp(3,1:66).';
+lt21620 = lt2temp(4,1:66).';
+lt21590 = lt2temp(5,1:66).';
+lt21580 = lt2temp(6,1:66).';
+
+probeWN1600 = 1e7./probe1600;
+probeWN = 1e7./probe;
+wvis = 1e7/696; % λmax for Rh800, converted to cm-1
+
+band1600 = 1600+probeWN1600-wvis;
+band1610 = 1610+probeWN-wvis;
+band1620 = 1620+probeWN-wvis;
+band1590 = 1590+probeWN-wvis;
+band1580 = 1580+probeWN-wvis;
+
+f23 = figure('visible',figvis);
+hold on; yyaxis left; ylabel('τ_1 (ps)');
+plot(band1590,lt11590);
+yyaxis right; ylabel('τ_2 (ps)');
+plot(band1590,lt21590);
+hold off; xlabel('Band size (cm^{-1})'); xlim([-800 inf]);
+
+% f24 = figure('visible',figvis);
+% hold on; yyaxis left; ylabel('τ_1 (ps)');
+% plot(band1580,lt11580); 
+% plot(band1590,lt11590);
+% plot(band1600,lt11600);
+% plot(band1610,lt11610);
+% %plot(band1620,lt11620);
+% yyaxis right; ylabel('τ_2 (ps)');
+% plot(band1580,lt21580);
+% plot(band1590,lt21590);
+% plot(band1600,lt21600);
+% plot(band1610,lt21610);
+% %plot(band1620,lt21620);
+% legend('1580 cm^{-1}','1590 cm^{-1}','1600 cm^{-1}','1610 cm^{-1}',...
+%     '1580 cm^{-1}','1590 cm^{-1}','1600 cm^{-1}','1610 cm^{-1}');
+% hold off; xlabel('Band size (cm^{-1})'); xlim([-800 inf]);
+
+% Fitting τ2 versus band size - piecewise linear
+bandcut1590 = 24;
+bandcut21590 = 44;
+b1590blue = band1590(1:bandcut1590);
+b1590red = band1590(bandcut1590:bandcut21590);
+lt21590blue = lt21590(1:bandcut1590);
+lt21590red = lt21590(bandcut1590:bandcut21590);
+
+bandcut1600 = 47;
+bandcut21600 = 87;
+b1600blue = band1600(1:bandcut1600);
+b1600red = band1600(bandcut1600:bandcut21600);
+lt21600blue = lt21600(1:bandcut1600);
+lt21600red = lt21600(bandcut1600:bandcut21600);
+
+% Fitting to a line, so using fitlm to get more detailed readout
+b1590bfit = fitlm(b1590blue,lt21590blue);
+b1590rfit = fitlm(b1590red,lt21590red);
+b1600bfit = fitlm(b1600blue,lt21600blue);
+b1600rfit = fitlm(b1600red,lt21600red);
+
+b1590br2 = abs(b1590bfit.Rsquared.Adjusted); % R^2
+b1590rr2 = abs(b1590rfit.Rsquared.Adjusted);
+b1600br2 = abs(b1600bfit.Rsquared.Adjusted);
+b1600rr2 = abs(b1600rfit.Rsquared.Adjusted);
+
+b1590bx1 = table2array(b1590bfit.Coefficients(2,1)); % slope
+b1600bx1 = table2array(b1600bfit.Coefficients(2,1));
+
+annot1 = {'R^2 = '+string(b1590rr2)};
+annot2(1) = {'R^2 = '+string(b1590br2)};
+annot2(2) = {string(round(1e4*b1590bx1)/1e4)+' ps/cm^{-1}'};
+annot2(3) = {string(round(1/b1590bx1))+' cm^{-1}/ps'};
+annot3 = {'R^2 = '+string(b1600rr2)};
+annot4(1) = {'R^2 = '+string(b1600br2)};
+annot4(2) = {string(round(1e4*b1600bx1)/1e4)+' ps/cm^{-1}'};
+annot4(3) = {string(round(1/b1600bx1))+' cm^{-1}/ps'};
+
+f25 = figure('visible',figvis);
+hold on;
+plot(b1590rfit)
+plot(b1590bfit)
+hold off;
+xlabel('Band size (cm-1)'); ylabel('τ2 (ps)');
+title('');
+annotation('textbox',[0.35 0.6 0.2 0.2],'String',...
+    annot1,'FitBoxToText','on');
+annotation('textbox',[0.55 0.6 0.2 0.2],'String',...
+    annot2,'FitBoxToText','on');
+
+f26 = figure('visible',figvis);
+hold on;
+plot(b1600rfit)
+plot(b1600bfit)
+hold off;
+xlabel('Band size (cm-1)'); ylabel('τ2 (ps)');
+title('');
+annotation('textbox',[0.35 0.6 0.2 0.2],'String',...
+    annot3,'FitBoxToText','on');
+annotation('textbox',[0.55 0.6 0.2 0.2],'String',...
+    annot4,'FitBoxToText','on');
+
+% τ1 vs τ2 amplitude ratio as a function of band size
+ltratioarray = squeeze(master(indrlt1lt2,indcvalue,:,:));
+
+ltratio1600 = ltratioarray(2,:).';
+ltratio1610 = ltratioarray(3,1:66).';
+ltratio1620 = ltratioarray(4,1:66).';
+ltratio1590 = ltratioarray(5,1:66).';
+ltratio1580 = ltratioarray(6,1:66).';
+
+f27 = figure('visible',figvis);
+semilogy(band1590,ltratio1590);
+xlabel('Band size (cm^{-1})'); ylabel('A_{1}/A_{2} at 1590 cm^{-1}');
+xlim([-800 inf]);
+
+f28 = figure('visible',figvis);
+semilogy(band1600,ltratio1600);
+xlabel('Band size (cm^{-1})'); ylabel('A_{1}/A_{2} at 1600 cm^{-1}');
+xlim([-800 inf]);
 
 
 %% Functions
