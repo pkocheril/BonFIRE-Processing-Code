@@ -4,24 +4,25 @@
 % fitting, configurable number of beating frequencies, writing out powers,
 % cleaned up lifetime logic, improved .txt handling, automated DFG/idler
 % assignment
+%%% v3 - padding signal for fitting, fitting negative peaks, SPCM + PMT
 
 % Initialize
 clear; clc; close all;
 
 % Configuration options - check before running!
-loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
+loadprevious = []; % 0 = new analysis, 1 = load previous, [] = auto-detect
 testrun = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
-targetfolders = 2:8; % indices of folders to process, [] = dialog
+targetfolders = 1:8; % indices of folders to process, [] = dialog
 filetype = 2; % 1 = .txt, 2 = .tif (solution), 3 = .tif (image)
 filenameconv = 2; % 0 = other,
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-[modfreq]-[PMTBW]-[etc],
-% 2 = [FOV]_[etc]_[size]_[idler]_[DFG]_[power]_[channel],
+% 2 = [etc]_[size]_[idler]_[DFG]_[power]_[channel],
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel],
 % 4 = [probeWL]_[IRWN]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
-t0pos = 194.85; % specify t0 position (mm), [] = autofind
-pairedDCAC = 1; % 1 = both DC and AC files present and paired, 0 = only AC
+t0pos = 194.9; % specify t0 position (mm), [] = autofind
+pairedDCAC = 2; % 2 = SPCM + PMT CH2, 1 = PMT CH1 + CH2, 0 = only PMT CH2
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 DFGyn = []; % [] = auto-choose, 1 = IR from DFG, 0 = IR from idler
@@ -31,13 +32,13 @@ powernormyn = 2; % 0 = no normalization, 1 = normalize by IR power,
 tempmod = 0; % 1 = temporal modulation in place, 0 = no beamsplitters
 ND = 2; % ND filter strength in probe path (script will update if possible)
 PMT = 1; % PMT gain (script will update if possible)
-prbpowerset = 200; % probe power in mW (script will update if possible)
+prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
 normprobepower = 1.5; % probe power on-sample to normalize to (default 1.5)
 trimlastT = 0; % how many points to remove from end of Tlist (default 0)
 trimfirstT = 0; % points to remove from start of Tlist (default 0)
-basefittype = 1; % 0 = no baseline fit, 1 = linear fit, 2 = exp fit
+basefittype = 2; % 0 = no baseline fit, 1 = linear fit, 2 = exp fit
 cutlow = 0.05; % lower baseline fit cutoff, (default 10th %ile)
 cuthigh = 0.95; % upper baseline fit cutoff, (default 90th %ile)
 ltfittype = 2; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
@@ -48,6 +49,7 @@ ltfittype = 2; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 % 12 = two Gauss*exp + Gauss*biexp, 13 = two Gauss*biexp + Gauss*exp, 
 % 14 = three Gauss*biexp, 15 = three beating Gauss*biexp
 numbeats = 0; % number of beating freqs allowed (0-3)
+padsignal = 1; % 0 = do nothing, 1 = pad end for fitting
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
@@ -225,7 +227,11 @@ if loadprevious == 0 % run new analysis
     end
     
     % Make master array to store all data (row,column,folder,file)
-    master = NaN(maxTlength,indcDCbase-3*(1-pairedDCAC),length(folders),maxfilesinfolder); % add 3 columns for DC raw, corrected, & baseline fit
+    if pairedDCAC > 0
+        master = NaN(maxTlength,indcDCbase,length(folders),maxfilesinfolder);
+    else  % remove 3 columns for DC raw, corrected, & baseline fit
+        master = NaN(maxTlength,indcDCbase-3,length(folders),maxfilesinfolder);
+    end
     master_size = size(master);
 
     if powernormyn > 0 % prep for power normalization
@@ -303,7 +309,9 @@ if loadprevious == 0 % run new analysis
                         prbWL = 1; % <-- unknown from filename
                         idlerWL = 1E7/idlerWN;
                         signalWL = 1/((1/1031.2)-(1/idlerWL));
-                        IRpower = IRpowermeter*300; % assuming 300 mW scale
+                        if IRpowermeter ~= 0
+                            IRpower = IRpowermeter*300; % assuming 300 mW scale
+                        end
                         if isempty(DFGyn) == 1
                             if idlerWL < 2600
                                 DFGyn = 1;
@@ -340,7 +348,9 @@ if loadprevious == 0 % run new analysis
                         ND = infofile(15);
                         idlerWN = round(infofile(16));
                         DFGWN = round(infofile(17));
-                        IRpower = infofile(18);
+                        if infofile(18) > 0
+                            IRpower = infofile(18);
+                        end
                         if isempty(DFGyn) == 1
                             if 1e7/idlerWN < 2600
                                 DFGyn = 1;
@@ -540,6 +550,7 @@ if loadprevious == 0 % run new analysis
         if isempty(T) == 0 % skip subfolders without data files
             for jj = startjj:totalfilesC % jj = file number in subfolder ii
                 F = fullfile(D,N{ii},C{jj}); % current file
+                IRpower = []; prbpower = [];
                 
                 % Filename parsing
                 folderinfo = split(F,"/"); % split path into folders
@@ -609,7 +620,9 @@ if loadprevious == 0 % run new analysis
                     prbWL = 1; % <-- unknown from filename
                     idlerWL = 1E7/idlerWN;
                     signalWL = 1/((1/1031.2)-(1/idlerWL));
-                    IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    if IRpowermeter ~= 0
+                        IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    end
                     if isempty(DFGyn) == 1
                         if idlerWL < 2600 % nm
                             DFGyn = 1;
@@ -652,7 +665,9 @@ if loadprevious == 0 % run new analysis
                     ND = infofile(15);
                     idlerWN = round(infofile(16));
                     DFGWN = round(infofile(17));
-                    IRpower = infofile(18);
+                    if infofile(18) > 0
+                        IRpower = infofile(18);
+                    end
                     if isempty(DFGyn) == 1
                         if idlerWL < 2600
                             DFGyn = 1;
@@ -710,7 +725,9 @@ if loadprevious == 0 % run new analysis
                     imgdim = char(fileinfo(end-4)); % '5X5'
                     idlerWL = 1E7/idlerWN;
                     signalWL = 1/((1/1031.2)-(1/idlerWL));
-                    IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    if IRpowermeter ~= 0
+                        IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    end
                 end
                 if filenameconv == 4 % parse IR sweep .tifs (unnecessary if IR checked)
                     subfolderinfo = split(N{ii}," "); % split subfolder at " "s
@@ -739,14 +756,23 @@ if loadprevious == 0 % run new analysis
                     imgdim = char(fileinfo(end-4)); % '5X5'
                     idlerWL = 1E7/idlerWN;
                     signalWL = 1/((1/1031.2)-(1/idlerWL));
-                    IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    if IRpowermeter ~= 0
+                        IRpower = IRpowermeter*300; % assuming 300 mW scale
+                    end
+                end
+
+                if isempty(IRpower) == 1 % if no IR power found
+                    IRpower = IRpowerset; % set to power from config
+                end
+                if isempty(prbpower) == 1 % if no probe power found
+                    prbpower = prbpowerset; % set to power from config
                 end
     
                 % Load data
                 if filetype == 1 % load data from .txt
                     data = importdata(F); % load data
                     x = data(:,1); % save delay position as x
-                    if pairedDCAC == 1
+                    if pairedDCAC > 0
                         DC = data(:,2); % save channel 1 as DC
                         signal = data(:,3); % save channel 2 as signal
                     else
@@ -762,7 +788,7 @@ if loadprevious == 0 % run new analysis
                     signal = signal(trimfirstT+1:end-trimlastT);
                     % No standard deviation data present - write as zeros
                     sigsds = zeros(height(signal),width(signal));
-                    if pairedDCAC == 1
+                    if pairedDCAC > 0
                         DCsds = zeros(height(signal),width(signal));
                     end
                     imagesize = [1 1];
@@ -771,11 +797,17 @@ if loadprevious == 0 % run new analysis
                     x = importdata(Tlistname); % load Tlist
                     data = double(tiffreadVolume(F));
                     imagesize = size(data);
-                    if pairedDCAC == 1
-                        F_DC = F;
-                        F_DC(end-4) = "1";
-                        DCdata = double(tiffreadVolume(F_DC));
-                    else
+                    if pairedDCAC > 0
+                        if pairedDCAC == 2 % SPCM + CH2
+                            F_DC = F;
+                            F_DC(end-6:end+1) = "SPCM.tif";
+                            DCdata = double(tiffreadVolume(F_DC));
+                        else
+                            F_DC = F;
+                            F_DC(end-4) = "1";
+                            DCdata = double(tiffreadVolume(F_DC));
+                        end
+                    else % no paired DCAC
                         DCdata = zeros(height(data),width(data),length(x));
                     end
                     x = x(trimfirstT+1:end-trimlastT);
@@ -820,7 +852,7 @@ if loadprevious == 0 % run new analysis
                         if filetype == 3 % load pixel data
                             signal = squeeze(data(iii,jjj,:));
                             sigsds = zeros(height(signal),width(signal));
-                            if pairedDCAC == 1
+                            if pairedDCAC > 0
                                 DC = squeeze(DCdata(iii,jjj,:));
                                 DCsds = zeros(sigsds);
                             else
@@ -861,7 +893,7 @@ if loadprevious == 0 % run new analysis
                                 prbpower = prbpower/(10^(ND)); % ND1: 15.6 mW -> 1.56 mW
                                 signal = signal*(normprobepower/prbpower);
                                 sigsds = sigsds*(normprobepower/prbpower);
-                                if pairedDCAC == 1
+                                if pairedDCAC > 0
                                     DC = DC*(normprobepower/prbpower);
                                     DCsds = DCsds*(normprobepower/prbpower);
                                 end
@@ -874,7 +906,7 @@ if loadprevious == 0 % run new analysis
                                     if pbcorrfactor <= 10
                                         signal = signal*pbcorrfactor;
                                         sigsds = sigsds*pbcorrfactor;
-                                        if pairedDCAC == 1
+                                        if pairedDCAC > 0
                                             DC = DC*pbcorrfactor;
                                             DCsds = DCsds*pbcorrfactor;
                                         end
@@ -883,7 +915,7 @@ if loadprevious == 0 % run new analysis
                                             warning('Large photobleaching - using log-scale correction')
                                             signal = signal*(1+log(pbcorrfactor));
                                             sigsds = sigsds*(1+log(pbcorrfactor));
-                                            if pairedDCAC == 1
+                                            if pairedDCAC > 0
                                                 DC = DC*(1+log(pbcorrfactor));
                                                 DCsds = DCsds*(1+log(pbcorrfactor));
                                             end
@@ -897,7 +929,7 @@ if loadprevious == 0 % run new analysis
                                     normfactor = 0.5/normpeak; % normalizing to peak height of 0.5;
                                     signal = signal*normfactor;
                                     sigsds = sigsds*normfactor;
-                                    if pairedDCAC == 1
+                                    if pairedDCAC > 0
                                         DC = DC*normfactor;
                                         DCsds = DCsds*normfactor;
                                     end
@@ -910,7 +942,7 @@ if loadprevious == 0 % run new analysis
                                     normfactor = 0.5/(normpeak*gainfactor); % normalizing to peak height of 0.5, PMT gain 10
                                     signal = signal*normfactor;
                                     sigsds = sigsds*normfactor;
-                                    if pairedDCAC == 1
+                                    if pairedDCAC > 0
                                         DC = DC*normfactor;
                                         DCsds = DCsds*normfactor;
                                     end
@@ -924,7 +956,7 @@ if loadprevious == 0 % run new analysis
                         tbase = [t(2:ilow); t(ihigh:end)]; % trimmed t
                         sigbase = [signal(2:ilow); signal(ihigh:end)]; % trimmed signal
                         sbr = max(signal(ilow:ihigh))/mean(signal(ihigh:end));
-                        if pairedDCAC == 1
+                        if pairedDCAC > 0
                             DCbase = [DC(2:ilow); DC(ihigh:end)]; % trimmed DC
                             DCsbr = max(DC(ilow:ihigh))/mean(DC(ihigh:end));
                         end
@@ -933,7 +965,7 @@ if loadprevious == 0 % run new analysis
                         if basefittype == 0 % no baseline fitting, set basecurve to 0
                             basecurve = zeros(height(t),width(t));
                             bleachrate = 0;
-                            if pairedDCAC == 1
+                            if pairedDCAC > 0
                                 DCbasecurve = zeros(height(t),width(t));
                                 DCbleachrate = 0;
                                 DCsbr = 0;
@@ -956,7 +988,7 @@ if loadprevious == 0 % run new analysis
                                 else % bleach rate doesn't have physical meaning
                                     bleachrate = 0;
                                 end
-                                if pairedDCAC == 1 % fit DC baseline
+                                if pairedDCAC > 0 % fit DC baseline
                                     DCbasefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))-DCbase;
                                     DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0 0];
                                     DCbasefit = lsqnonlin(DCbasefn,DCbgs,[],[],baseopt);
@@ -977,7 +1009,7 @@ if loadprevious == 0 % run new analysis
                                     else
                                         bleachrate = 0;
                                     end
-                                    if pairedDCAC == 1
+                                    if pairedDCAC > 0
                                         DCbasefit = fit(tbase,DCbase,'poly1');
                                         DCbasecoef = coeffvalues(DCbasefit);
                                         DCbasecurve = polyval(DCbasecoef,t);
@@ -993,6 +1025,59 @@ if loadprevious == 0 % run new analysis
                             end
                         end
 
+                        % Calculate peak height and integrated signal
+                        corrsig = signal - basecurve;
+                        % Determine if signal peak is negative or positive
+                        abscorrsig = abs(corrsig);
+                        flipcorrsig = -1*corrsig;
+                        corrabsdist = sum((corrsig-abscorrsig).^2);
+                        flipabsdist = sum((flipcorrsig-abscorrsig).^2);
+                        if corrabsdist < flipabsdist % peak is positive
+                            sigsign = 1; % corrsig is closer to abscorrsig
+                        else % peak is negative
+                            sigsign = -1; % flipcorrsig is closer to abscorrsig
+                            corrsig = basecurve-signal; % corrsig becomes positive
+                        end
+                        [sigpeak,maxindex] = max(corrsig);
+                        peaksd = sigsds(maxindex);
+                        integsig = sum(corrsig);
+                        integsd = mean(sigsds,'all');
+                        corrsigbase = [corrsig(2:ilow); corrsig(ihigh:end)];
+                        noise = range(corrsigbase);
+                        basesd = std(corrsigbase);
+                        snr = sigpeak/noise;
+                        snrsweep = corrsig/noise;
+                        intsnr = sum(snrsweep);
+                        %figure; plot(t,corrsig);
+
+                        if prbWL < 961 && prbWL > 699 % interpolate for tD compensation
+                            alignlength = ceil(((t(end)-t(1))/(tuningrate/2))+1); % want talignspacing >= tuningrate/2
+                            talign = linspace(t(1),t(end),alignlength).';
+                            sigalign = spline(t, corrsig, talign);
+                            talignspacing = talign(2)-talign(1); % evenly spaced
+    
+                            % tD compensation
+                            if isempty(minprobe) == 1
+                                minprobe = 750;
+                            end
+                            if isempty(maxprobe) == 1
+                                maxprobe = 960;
+                            end
+                            if prbWL < minprobe
+                                minprobe = prbWL;
+                            end
+                            fulltimeoffset = tuningrate*(maxprobe-minprobe); % ps
+                            currentprobetimeoffset = tuningrate*(prbWL-minprobe); % ps
+                            alignstart = floor(currentprobetimeoffset/talignspacing); % index
+                            maxalignstart = floor(fulltimeoffset/talignspacing);
+                            alignend = length(talign)-(maxalignstart-alignstart);
+                            alignstart = alignstart+1;
+                            talign = talign(alignstart:alignend);
+                            sigalign = sigalign(alignstart:alignend);
+                        else
+                            talign = t; sigalign = signal;
+                        end
+
                         % Calculate t spacing
                         deltat = zeros(length(t)-1,1); % check t spacing
                         for i=1:length(t)-1
@@ -1001,6 +1086,7 @@ if loadprevious == 0 % run new analysis
                         tspacing = unique(deltat); % length 1 <-> evenly spaced t
                         
                         if isempty(ltfittype) == 1 % auto-choose lifetime fitting
+                            emptytype = 1;
                             fittypes = importdata('/Users/pkocheril/Documents/Caltech/Wei Lab/Spreadsheets/Lifetime fit typing.csv');
                             fittypes = fittypes.data;
                             if prbWL > 699
@@ -1010,23 +1096,36 @@ if loadprevious == 0 % run new analysis
                                 ltfittype = fittypes(round(IRWN),4);
                                 numbeats = fittypes(round(IRWN),5);
                             end
+                        else
+                            emptytype = 0;
                         end
 
                         if ltfittype > 0 % lifetime fitting
                             % Check t spacing (even) and length (odd)
                             if length(tspacing) == 1  && mod(length(t),2) == 1
-                                tint = t; sigint = signal;
+                                tint = t; sigint = corrsig;
                             else % interpolate for convolution
                                 tint = linspace(t(1),t(end),length(t)*2-1).';
-                                sigint = spline(t, signal, tint);
+                                sigint = spline(t, corrsig, tint);
                             end
+
+                            tintspace = tint(2)-tint(1);
+                            originallength = length(tint);
+                            tlong = linspace(tint(1),tint(end)+tintspace*100,length(tint)+100).';
+                            siglong = sigint;
+                            siglong(length(sigint)+1:length(tlong)) = min(sigint(end-5:end));
+                            if padsignal == 1 % signal padding for more accurate fitting
+                                tint = tlong;
+                                sigint = siglong;
+                            end
+
                             tc = tint(1:2:end); % odd values of tint --> convolution
                             if powernormyn > 0
                                 IRFamp = IRpower/1e3; % IRF amplitude (~ IR power in W)
                             else
                                 IRFamp = 50/1e3; % default to 50 mW
                             end
-                            
+
                             if ltfittype > 4
                                 % Define error function(r) as fit minus signal
                                 fun = @(r) conv(exp(-r(2)*(tc-r(1)).^2), ... % conv 1
@@ -1100,7 +1199,9 @@ if loadprevious == 0 % run new analysis
                                     lb(22) = basefit(3); ub(22) = lb(22);
                                     lb(23) = basefit(4); ub(23) = lb(23);
                                 end
-    
+                                
+                                lb(19:23) = 0; ub(19:23) = 0;
+                                
                                 % Implement fit options from config
                                 if ltfittype == 1 % Gaussian*exp
                                     lb(5:18) = 0; ub(5:18) = 0;
@@ -1146,13 +1247,13 @@ if loadprevious == 0 % run new analysis
                                 end
                                 if numbeats > 0 % beating control
                                     if numbeats == 1
-                                        lb([11:18 34:41]) = 0; ub([11:18 34:41]) = 0;
+                                        lb([11:18 34:41 52:59]) = 0; ub([11:18 34:41 52:59]) = 0;
                                     end
                                     if numbeats == 2
-                                        lb([15:18 38:41]) = 0; ub([15:18 38:41]) = 0;
+                                        lb([15:18 38:41 56:59]) = 0; ub([15:18 38:41 56:59]) = 0;
                                     end
-                                else
-                                    lb([7:18 30:41]) = 0; ub([7:18 30:41]) = 0;
+                                else % no beating
+                                    lb([7:18 30:41 48:59]) = 0; ub([7:18 30:41 48:59]) = 0;
                                 end
     
                                 % Parameter constraints from config
@@ -1272,6 +1373,7 @@ if loadprevious == 0 % run new analysis
                                     lb(21:23) = 0; ub(21:23) = 0; % mute exponential terms
                                     lb(19) = basecoef(1); ub(19) = lb(19);
                                     lb(20) = basecoef(2); ub(20) = lb(20);
+                                    r0(19) = basecoef(1); r0(20) = basecoef(2);
                                 end
                                 if basefittype == 2 % exponential baseline
                                     lb(19) = 0; ub(19) = 0; % mute linear term
@@ -1279,7 +1381,13 @@ if loadprevious == 0 % run new analysis
                                     lb(21) = basefit(2); ub(21) = lb(21);
                                     lb(22) = basefit(3); ub(22) = lb(22);
                                     lb(23) = basefit(4); ub(23) = lb(23);
+                                    r0(20) = basefit(1); r0(21) = basefit(2);
+                                    r0(22) = basefit(3); r0(23) = basefit(4);
                                 end
+                                
+                                % Baseline removed
+                                lb(19:23) = 0; ub(19:23) = 0;
+                                
     
                                 % Implement fit options from config
                                 if ltfittype == 1 % Gaussian*exp
@@ -1299,7 +1407,7 @@ if loadprevious == 0 % run new analysis
                                     if numbeats == 2
                                         lb(15:18) = 0; ub(15:18) = 0;
                                     end
-                                else
+                                else % no beating
                                     lb(7:18) = 0; ub(7:18) = 0;
                                 end
     
@@ -1358,6 +1466,16 @@ if loadprevious == 0 % run new analysis
                                 lt1lt2 = fitval(5)/fitval(3); % still A1/A2
                             end
 
+                            % Return to original length and sign
+                            %figure; plot(tint,sigint,tint,fitcurve);
+                            tint = tint(1:originallength);
+                            sigint = sigint(1:originallength);
+                            fitcurve = fitcurve(1:originallength);
+                            basecurve = spline(t,basecurve,tint);
+                            sigint = basecurve(1:originallength)+sigsign*sigint(1:originallength);
+                            fitcurve = basecurve(1:originallength)+sigsign*fitcurve(1:originallength);
+                            %figure; plot(tint,sigint);
+
                             % Calculate residuals, ssresid, and IRF FWHM
                             resid = sigint-fitcurve;
                             ssresid = sum(resid.^2); % sum of squares of residuals
@@ -1367,13 +1485,12 @@ if loadprevious == 0 % run new analysis
                                 r2 = 0;
                             end
                             FWHM = sqrt(log(2)/fitval(2)); % pulse width, ps
-
                         else % no lifetime fitting
                             tint = t; sigint = signal; fitcurve = signal;
                             lifetime1 = 0; lifetime2 = 0; lt1lt2 = 0;
                             lifetime3 = 0; lifetime4 = 0; lt3lt4 = 0;
                             lifetime5 = 0; lifetime6 = 0; lt5lt6 = 0;
-                            fitval = zeros(59,1); r2 = 0;
+                            fitval = zeros(59,1); r2 = 0; FWHM = 0;
                         end
                         
                         if filetype == 3
@@ -1392,9 +1509,22 @@ if loadprevious == 0 % run new analysis
                         sDCbleachrate = string(sprintf('%0.2g',DCbleachrate)); % round to 2 sig figs
                         lt1 = string(round(10*lifetime1)/10); % round to nearest 0.1 ps
                         lt2 = string(round(10*lifetime2)/10);
-                        beatstring = string(fitval(9)*1e12/(pi*29979245800))+...
-                            ', '+string(fitval(13)*1e12/(pi*29979245800))+...
-                            ', '+string(fitval(17)*1e12/(pi*29979245800));
+                        if numbeats == 3 % make beating annotation
+                            beatstring = string(fitval(9)*1e12/(pi*29979245800))+...
+                                ', '+string(fitval(13)*1e12/(pi*29979245800))+...
+                                ', '+string(fitval(17)*1e12/(pi*29979245800));
+                        else
+                            if numbeats == 2
+                                beatstring = string(fitval(9)*1e12/(pi*29979245800))+...
+                                    ', '+string(fitval(13)*1e12/(pi*29979245800));
+                            else
+                                if numbeats == 1
+                                    beatstring = string(fitval(9)*1e12/(pi*29979245800));
+                                else
+                                    beatstring = "None";
+                                end
+                            end
+                        end
                         sr2 = string(sprintf('%0.3g',r2)); % round to 3 sig figs
                         slt1lt2 = string(sprintf('%0.3g',lt1lt2));
                         
@@ -1406,7 +1536,7 @@ if loadprevious == 0 % run new analysis
                             else
                                 annotdim = [0.35 0.6 0.2 0.2];
                             end
-                            if pairedDCAC == 1
+                            if pairedDCAC > 0
                                 annot(length(annot)+1) = {'bleach = '+...
                                     sDCbleachrate+' ps^{-1}'};
                             end
@@ -1433,51 +1563,10 @@ if loadprevious == 0 % run new analysis
                         end
                         
                         % Prepare output filename(s)
-                        if filetype > 1 && pairedDCAC == 1
+                        if filetype > 1 && pairedDCAC > 0
                             outname = string(F(1:end-8)) + "_DCAC";
                         else
                             outname = string(F(1:end-4));
-                        end
-                        
-                        % Calculate peak height and integrated signal
-                        corrsig = signal - basecurve;
-                        [sigpeak,maxindex] = max(corrsig);
-                        peaksd = sigsds(maxindex);
-                        integsig = sum(corrsig);
-                        integsd = mean(sigsds,'all');
-                        corrsigbase = [corrsig(2:ilow); corrsig(ihigh:end)];
-                        noise = range(corrsigbase);
-                        basesd = std(corrsigbase);
-                        snr = sigpeak/noise;
-                        snrsweep = corrsig/noise;
-                        intsnr = sum(snrsweep);
-
-                        if prbWL < 961 && prbWL > 699 % interpolate for tD compensation
-                            alignlength = ceil(((t(end)-t(1))/(tuningrate/2))+1); % want talignspacing >= tuningrate/2
-                            talign = linspace(t(1),t(end),alignlength).';
-                            sigalign = spline(t, corrsig, talign);
-                            talignspacing = talign(2)-talign(1); % evenly spaced
-    
-                            % tD compensation
-                            if isempty(minprobe) == 1
-                                minprobe = 750;
-                            end
-                            if isempty(maxprobe) == 1
-                                maxprobe = 960;
-                            end
-                            if prbWL < minprobe
-                                minprobe = prbWL;
-                            end
-                            fulltimeoffset = tuningrate*(maxprobe-minprobe); % ps
-                            currentprobetimeoffset = tuningrate*(prbWL-minprobe); % ps
-                            alignstart = floor(currentprobetimeoffset/talignspacing); % index
-                            maxalignstart = floor(fulltimeoffset/talignspacing);
-                            alignend = length(talign)-(maxalignstart-alignstart);
-                            alignstart = alignstart+1;
-                            talign = talign(alignstart:alignend);
-                            sigalign = sigalign(alignstart:alignend);
-                        else
-                            talign = t; sigalign = signal;
                         end
                 
                         if ltfittype > 0 % prepare figure legend
@@ -1486,7 +1575,7 @@ if loadprevious == 0 % run new analysis
                             legend1 = {'Data','Baseline data','Baseline'};
                         end
                         
-                        if pairedDCAC == 1 % make figure
+                        if pairedDCAC > 0 % make figure
                             corrDC = DC - DCbasecurve;
                             [DCpeak,DCmaxindex] = max(corrDC);
                             DCpeaksd = DCsds(DCmaxindex);
@@ -1495,6 +1584,11 @@ if loadprevious == 0 % run new analysis
                             corrDCbase = [corrDC(2:ilow); corrDC(ihigh:end)];
                             DCnoise = range(corrDCbase);
                             DCsnr = DCpeak/DCnoise;
+                            if pairedDCAC == 2
+                                ylabelDC = 'SPCM signal (cpms)';
+                            else
+                                ylabelDC = 'DC signal (AU)';
+                            end
                         
                             % Plot DC and AC side-by-side
                             fig = figure('visible',visibility); 
@@ -1506,7 +1600,7 @@ if loadprevious == 0 % run new analysis
                             nexttile([1 1]); 
                             hold on; errorbar(t,DC,DCsds,'o');
                             plot(tbase,DCbase,'o',t,DCbasecurve,'-'); hold off;
-                            xlabel('Time (ps)'); ylabel('DC signal (AU)');
+                            xlabel('Time (ps)'); ylabel(ylabelDC);
                             legend('Data','Baseline data','Baseline');
                             nexttile([1 1]); 
                             if ltfittype > 0
@@ -1515,7 +1609,7 @@ if loadprevious == 0 % run new analysis
                                 nexttile([1 2]);
                             end
                             hold on; errorbar(t,signal,sigsds,'o');
-                            plot(tbase,sigbase,'go',t,basecurve,'-'); 
+                            plot(tbase,sigbase,'go',tint,basecurve,'-'); 
                             if ltfittype > 0
                                 plot(tint,fitcurve,'-')
                             end
@@ -1588,7 +1682,7 @@ if loadprevious == 0 % run new analysis
                             master(1:length(talign),indctalign,ii,jj) = talign;
                             master(1:length(sigalign),indcsigalign,ii,jj) = sigalign;
                 
-                            if pairedDCAC == 1
+                            if pairedDCAC > 0
                                 master(1:length(DC),indcrawDC,ii,jj) = DC(:);
                                 master(1:length(corrDC),indccorrDC,ii,jj) = corrDC(:);
                                 master(1:length(DCbasecurve),indcDCbase,ii,jj) = DCbasecurve(:);
@@ -1616,12 +1710,15 @@ if loadprevious == 0 % run new analysis
                 end
                 prbpower = []; % clear powers for next file
                 IRpower = []; % (otherwise, normalization can compound)
+                if emptytype == 1
+                    ltfittype = []; % empty for next file
+                end
             end
         end
     end
     
     if writeprocyn == 1 && filetype ~= 3 % write batch file
-        writematrix(master,'batch_align_flattenedv2.md','FileType','text') % backup, not very useful
+        writematrix(master,'batch_align_flattenedv3.md','FileType','text') % backup, not very useful
         writematrix(size(master),'master_size.yml','FileType','text')
     end
     if testrun == 0 % close background figures if not a test run
@@ -1663,6 +1760,93 @@ figvis = 'off';
 %cb=colorbar;
 %cb.Label.String='Corrected signal (AU)';
 %cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
+
+time = squeeze(master(1:master(indrtlist,indcvalue,8,1),indct,8,1)).';
+rawsig = squeeze(master(1:master(indrtlist,indcvalue,8,1),indcrawsig,8,:)).';
+csig = squeeze(master(1:master(indrtlist,indcvalue,8,1),indccorrsig,8,:)).';
+rawDC = squeeze(master(1:master(indrtlist,indcvalue,8,1),indcrawDC,8,:)).';
+
+conc = [0.01 0.1 0.5 0.75 1 2.5 4].';
+conclabel = strings(length(conc),1);
+
+for i=1:length(conc)
+    conclabel(i) = string(conc(i))+" mM ATTO740";
+end
+
+mm0p01 = mean(rawsig(1:3,:),1);
+mm0p1 = mean(rawsig(4:6,:),1);
+mm0p5 = mean(rawsig(7:9,:),1);
+mm0p75 = mean(rawsig(10:12,:),1);
+mm1 = mean(rawsig(13:15,:),1);
+mm2p5 = mean(rawsig(16:19,:),1);
+mm4 = mean(rawsig(20:22,:),1);
+
+allraw = [mm0p01; mm0p1; mm0p5; mm0p75; mm1; mm2p5; mm4];
+
+cmm0p01 = mean(csig(1:3,:),1);
+cmm0p1 = mean(csig(4:6,:),1);
+cmm0p5 = mean(csig(7:9,:),1);
+cmm0p75 = mean(csig(10:12,:),1);
+cmm1 = mean(csig(13:15,:),1);
+cmm2p5 = mean(csig(16:19,:),1);
+cmm4 = mean(csig(20:22,:),1);
+
+allc = [cmm0p01; cmm0p1; cmm0p5; cmm0p75; cmm1; cmm2p5; cmm4];
+
+allcot = allc;
+for i=1:7
+    allcot(i,:) = allraw(i,:) - allraw(i,end);
+end
+
+DCmm0p01 = mean(rawDC(1:3,:),1);
+DCmm0p1 = mean(rawDC(4:6,:),1);
+DCmm0p5 = mean(rawDC(7:9,:),1);
+DCmm0p75 = mean(rawDC(10:12,:),1);
+DCmm1 = mean(rawDC(13:15,:),1);
+DCmm2p5 = mean(rawDC(16:19,:),1);
+DCmm4 = mean(rawDC(20:22,:),1);
+
+allDC = [DCmm0p01; DCmm0p1; DCmm0p5; DCmm0p75; DCmm1; DCmm2p5; DCmm4];
+
+figure('visible',figvis);
+hold on;
+for i=1:length(conc)
+    plot(time,allraw(i,:),'LineWidth',2);
+end
+xlabel('Time (ps)'); ylabel('AC signal (AU)');
+legend(conclabel);
+
+figure('visible',figvis);
+hold on;
+for i=1:length(conc)
+    plot(time,allDC(i,:),'LineWidth',2);
+end
+xlabel('Time (ps)'); ylabel('SPCM signal (cpms)');
+legend(conclabel);
+
+pkheights = squeeze(master(indrsigpeak,indcvalue,8,:));
+
+pkht = [mean(pkheights(1:3));
+    mean(pkheights(4:6));
+    mean(pkheights(7:9));
+    mean(pkheights(10:12));
+    -1*mean(pkheights(13:15));
+    -1*mean(pkheights(16:19));
+    -1*mean(pkheights(20:22))];
+
+figure('visible',figvis);
+semilogx(conc,pkht,'o','LineWidth',2);
+xlabel('[ATTO740] (mM)'); ylabel('AC peak height (AU)');
+
+DCmeans = mean(allDC,2);
+
+figure('visible',figvis);
+plot(conc,DCmeans,'o','LineWidth',2);
+xlabel('[ATTO740] (mM)'); ylabel('Mean SPCM signal (cpms)');
+
+%%
+
+
 
 analyzed = 3:7;
 
