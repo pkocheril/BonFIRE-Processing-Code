@@ -12,14 +12,17 @@
 %%% v8 - added image fitting from image_fit_temporalv5, power loss from 
 % pinhole
 %%% v9 - updated based on sweep_proc_alignv3
+%%% v10 - reworked fitting to handle negative peaks better, replaced beat
+% fitting with FFT of residuals, added stretched exponential fitting,
+% fixed pulse width calculation (in progress)
+%%% -- replaced by fit_temp_sweep (overhaul of fitting protocol)
 
 % Load data
 clear; close all; clc;
 
 %F = '516nm_1500cm-1 (07)_5X5_Idler4063.7_DFG1570.0_P0.1294_CH2.tif';
-F = '516nm_1500cm-1 (06)_5X5_Idler4068.7_DFG1560.1_P0.1127_CH2.tif';
-Tlistname = 'Tlist.txt';
-
+F = '1590cm-1_21X21_Idler4053.8_DFG1589.8_P0.2190_CH2.tif';
+Tlistname = 'Tlist_21x21.txt';
 
 % Configuration options - check before running!
 visibility = 'on';
@@ -32,7 +35,7 @@ filenameconv = 2; % 0 = other,
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel],
 % 4 = [probeWL]_[IRWN]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
 t0pos = 194.9; % specify t0 position (mm), [] = autofind
-pairedDCAC = 1; % 2 = SPCM + PMT CH2, 1 = PMT CH1 + CH2, 0 = only PMT CH2
+pairedDCAC = 0; % 2 = SPCM + PMT CH2, 1 = PMT CH1 + CH2, 0 = only PMT CH2
 DFGyn = []; % [] = auto-choose, 1 = IR from DFG, 0 = IR from idler
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + photobleach correction(bad)
@@ -44,9 +47,9 @@ prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
 normprobepower = 1.5; % probe power on-sample to normalize to (default 1.5)
-trimlastT = 4; % how many points to remove from end of Tlist (default 0)
+trimlastT = 0; % how many points to remove from end of Tlist (default 0)
 trimfirstT = 0; % points to remove from start of Tlist (default 0)
-basefittype = 2; % 0 = no baseline fit, 1 = linear fit, 2 = exp fit
+basefittype = 2; % 0 = no baseline fit, 1 = linear fit, 2 = exp, 3 = exp + line
 cutlow = 0.05; % lower baseline fit cutoff, (default 10th %ile)
 cuthigh = 0.95; % upper baseline fit cutoff, (default 90th %ile)
 ltfittype = 1; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
@@ -57,8 +60,8 @@ ltfittype = 1; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 % 12 = two Gauss*exp + Gauss*biexp, 13 = two Gauss*biexp + Gauss*exp, 
 % 14 = three Gauss*biexp, 15 = three beating Gauss*biexp
 numbeats = 0; % number of beating freqs allowed (0-3)
-padsignal = 0; % 0 = do nothing, 1 = pad end for fitting
-setpulsewidth = 2.4; % define pulse width (ps) in fit, [] = float
+padsignal = 1; % 0 = do nothing, 1 = pad end for fitting
+setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
 tuningrate = 0.033; % PicoEmerald signal t0 tuning rate (ps/nm)
@@ -398,61 +401,90 @@ for iii=startiii:imagesize(1)
                 DCbleachrate = 0;
                 DCsbr = 0;
             end
-        else
-            if basefittype == 2 % fit baseline to exponential w/ vertical offset
-                basefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))-sigbase; % error function
-                baseopt=optimoptions(@lsqnonlin);
-                baseopt.MaxFunctionEvaluations = 1e6; % let the fit run longer
-                baseopt.MaxIterations = 1e6; % let the fit run longer
-                baseopt.FunctionTolerance = 1e-12; % make the fit more accurate
-                baseopt.OptimalityTolerance = 1e-12; % make the fit more accurate
-                baseopt.StepTolerance = 1e-12; % make the fit more precise
-                baseopt.Display = 'off'; % silence console output
-                basegs = [min(sigbase) 0.1*(max(sigbase)-min(sigbase)) 0 0];
-                basefit = lsqnonlin(basefn,basegs,[],[],baseopt);
-                basecurve = basefit(1)+basefit(2)*exp(-basefit(3)*(t-basefit(4)));
-                if basefit(2) > 0 && basefit(3) > 0 
-                    bleachrate = basefit(3); % ps-1
-                else % bleach rate doesn't have physical meaning
-                    bleachrate = 0;
-                end
-                if pairedDCAC > 0 % fit DC baseline
-                    DCbasefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))-DCbase;
-                    DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0 0];
-                    DCbasefit = lsqnonlin(DCbasefn,DCbgs,[],[],baseopt);
-                    DCbasecurve = DCbasefit(1)+DCbasefit(2)*exp(-DCbasefit(3)*(t-DCbasefit(4)));
-                    if DCbasefit(2) > 0 && DCbasefit(3) > 0
-                        DCbleachrate = DCbasefit(3); % ps-1
-                    else
-                        DCbleachrate = 0;
-                    end
+        end
+        if basefittype == 1 % linear baseline fit
+            basefit = fit(tbase,sigbase,'poly1'); % fit baseline
+            basecoef = coeffvalues(basefit); % 1 = slope, 2 = int
+            basecurve = polyval(basecoef,t);
+            if basecoef(1) <= 0 
+                bleachrate = -basecoef(1); % ps^-1
+            else
+                bleachrate = 0;
+            end
+            if pairedDCAC > 0
+                DCbasefit = fit(tbase,DCbase,'poly1');
+                DCbasecoef = coeffvalues(DCbasefit);
+                DCbasecurve = polyval(DCbasecoef,t);
+                if basecoef(1) <= 0 
+                    DCbleachrate = -DCbasecoef(1); % ps^-1
+                else
+                    DCbleachrate = 0;
                 end
             else
-                if basefittype == 1 % linear baseline fit
-                    basefit = fit(tbase,sigbase,'poly1'); % fit baseline
-                    basecoef = coeffvalues(basefit); % 1 = slope, 2 = int
-                    basecurve = polyval(basecoef,t);
-                    if basecoef(1) <= 0 
-                        bleachrate = -basecoef(1); % ps^-1
-                    else
-                        bleachrate = 0;
-                    end
-                    if pairedDCAC > 0
-                        DCbasefit = fit(tbase,DCbase,'poly1');
-                        DCbasecoef = coeffvalues(DCbasefit);
-                        DCbasecurve = polyval(DCbasecoef,t);
-                        if basecoef(1) <= 0 
-                            DCbleachrate = -DCbasecoef(1); % ps^-1
-                        else
-                            DCbleachrate = 0;
-                        end
-                    else
-                        DCbleachrate = 0;
-                    end
+                DCbleachrate = 0;
+            end
+        end
+        if basefittype == 2 % fit baseline to exponential w/ vertical offset
+            basefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))-sigbase; % error function
+            baseopt=optimoptions(@lsqnonlin);
+            baseopt.MaxFunctionEvaluations = 1e6; % let the fit run longer
+            baseopt.MaxIterations = 1e6; % let the fit run longer
+            baseopt.FunctionTolerance = 1e-12; % make the fit more accurate
+            baseopt.OptimalityTolerance = 1e-12; % make the fit more accurate
+            baseopt.StepTolerance = 1e-12; % make the fit more precise
+            baseopt.Display = 'off'; % silence console output
+            basegs = [min(sigbase) 0.1*(max(sigbase)-min(sigbase)) 0 0];
+            basefit = lsqnonlin(basefn,basegs,[],[],baseopt);
+            basecurve = basefit(1)+basefit(2)*exp(-basefit(3)*(t-basefit(4)));
+            if basefit(2) > 0 && basefit(3) > 0 
+                bleachrate = basefit(3); % ps-1
+            else % bleach rate doesn't have physical meaning
+                bleachrate = 0;
+            end
+            if pairedDCAC > 0 % fit DC baseline
+                DCbasefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))-DCbase;
+                DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0 0];
+                DCbasefit = lsqnonlin(DCbasefn,DCbgs,[],[],baseopt);
+                DCbasecurve = DCbasefit(1)+DCbasefit(2)*exp(-DCbasefit(3)*(t-DCbasefit(4)));
+                if DCbasefit(2) > 0 && DCbasefit(3) > 0
+                    DCbleachrate = DCbasefit(3); % ps-1
+                else
+                    DCbleachrate = 0;
                 end
             end
         end
-
+        if basefittype == 3 % linear + exponential baseline fit
+            basefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))+b(5)*tbase-sigbase; % error function
+            baseopt=optimoptions(@lsqnonlin);
+            baseopt.MaxFunctionEvaluations = 1e6; % let the fit run longer
+            baseopt.MaxIterations = 1e6; % let the fit run longer
+            baseopt.FunctionTolerance = 1e-12; % make the fit more accurate
+            baseopt.OptimalityTolerance = 1e-12; % make the fit more accurate
+            baseopt.StepTolerance = 1e-12; % make the fit more precise
+            baseopt.Display = 'off'; % silence console output
+            basegs = [min(sigbase) 0.1*(max(sigbase)-min(sigbase)) 0 0 0];
+            basefit = lsqnonlin(basefn,basegs,[],[],baseopt);
+            basecurve = basefit(1)+basefit(2)*exp(-basefit(3)*(t-basefit(4)))+...
+                basefit(5)*t;
+            if basefit(2) > 0 && basefit(3) > 0 
+                bleachrate = basefit(3); % ps-1
+            else % bleach rate doesn't have physical meaning
+                bleachrate = 0;
+            end
+            if pairedDCAC > 0 % fit DC baseline
+                DCbasefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))+b(5)*tbase-DCbase;
+                DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0 0 0];
+                DCbasefit = lsqnonlin(DCbasefn,DCbgs,[],[],baseopt);
+                DCbasecurve = DCbasefit(1)+DCbasefit(2)*exp(-DCbasefit(3)*(t-DCbasefit(4)))+...
+                    DCbasefit(5)*t;
+                if DCbasefit(2) > 0 && DCbasefit(3) > 0
+                    DCbleachrate = DCbasefit(3); % ps-1
+                else
+                    DCbleachrate = 0;
+                end
+            end
+        end
+        
         % Calculate peak height and integrated signal
         corrsig = signal - basecurve;
         % Determine if signal peak is negative or positive
@@ -461,12 +493,10 @@ for iii=startiii:imagesize(1)
         corrabsdist = sum((corrsig-abscorrsig).^2);
         flipabsdist = sum((flipcorrsig-abscorrsig).^2);
         if corrabsdist < flipabsdist % peak is positive
-            sigsign = 1; % corrsig is closer to abscorrsig
+            [sigpeak,maxindex] = max(corrsig); % corrsig is closer to abscorrsig
         else % peak is negative
-            sigsign = -1; % flipcorrsig is closer to abscorrsig
-            corrsig = basecurve-signal; % corrsig becomes positive
+            [sigpeak,maxindex] = min(corrsig); % flipcorrsig is closer to abscorrsig
         end
-        [sigpeak,maxindex] = max(corrsig);
         peaksd = sigsds(maxindex);
         integsig = sum(corrsig);
         integsd = mean(sigsds,'all');
@@ -476,35 +506,6 @@ for iii=startiii:imagesize(1)
         snr = sigpeak/noise;
         snrsweep = corrsig/noise;
         intsnr = sum(snrsweep);
-        %figure; plot(t,corrsig);
-
-        if prbWL < 961 && prbWL > 699 % interpolate for tD compensation
-            alignlength = ceil(((t(end)-t(1))/(tuningrate/2))+1); % want talignspacing >= tuningrate/2
-            talign = linspace(t(1),t(end),alignlength).';
-            sigalign = spline(t, corrsig, talign);
-            talignspacing = talign(2)-talign(1); % evenly spaced
-
-            % tD compensation
-            if isempty(minprobe) == 1
-                minprobe = 750;
-            end
-            if isempty(maxprobe) == 1
-                maxprobe = 960;
-            end
-            if prbWL < minprobe
-                minprobe = prbWL;
-            end
-            fulltimeoffset = tuningrate*(maxprobe-minprobe); % ps
-            currentprobetimeoffset = tuningrate*(prbWL-minprobe); % ps
-            alignstart = floor(currentprobetimeoffset/talignspacing); % index
-            maxalignstart = floor(fulltimeoffset/talignspacing);
-            alignend = length(talign)-(maxalignstart-alignstart);
-            alignstart = alignstart+1;
-            talign = talign(alignstart:alignend);
-            sigalign = sigalign(alignstart:alignend);
-        else
-            talign = t; sigalign = signal;
-        end
 
         % Calculate t spacing
         deltat = zeros(length(t)-1,1); % check t spacing
@@ -531,10 +532,10 @@ for iii=startiii:imagesize(1)
         if ltfittype > 0 % lifetime fitting
             % Check t spacing (even) and length (odd)
             if length(tspacing) == 1  && mod(length(t),2) == 1
-                tint = t; sigint = corrsig;
+                tint = t; sigint = signal; % data are good for fitting
             else % interpolate for convolution
                 tint = linspace(t(1),t(end),length(t)*2-1).';
-                sigint = spline(t, corrsig, tint);
+                sigint = spline(t, signal, tint);
             end
 
             tintspace = tint(2)-tint(1);
@@ -547,376 +548,394 @@ for iii=startiii:imagesize(1)
                 sigint = siglong;
             end
 
-            tc = tint(1:2:end); % odd values of tint --> convolution
+            tc = tint(1:2:end); % odd values of tint --> convolution input
             if powernormyn > 0
                 IRFamp = IRpower/1e3; % IRF amplitude (~ IR power in W)
             else
                 IRFamp = 50/1e3; % default to 50 mW
             end
 
-            if ltfittype > 4
-                % Define error function(r) as fit minus signal
-                fun = @(r) conv(exp(-r(2)*(tc-r(1)).^2), ... % conv 1
-                    heaviside(tc).*(r(3)*exp(-r(4)*(tc))+r(5)*exp(-r(6)*(tc))+...
-                    r(7)*exp(-r(8)*(tc)).*cos(r(9)*tc-r(10))+ ...
-                    r(11)*exp(-r(12)*(tc)).*cos(r(13)*tc-r(14))+ ...
-                    r(15)*exp(-r(16)*(tc)).*cos(r(17)*tc-r(18))))+ ...
-                    r(19)*tint+r(20)+r(21)*exp(-r(22)*(tint-r(23)))+ ... % baseline
-                    conv(exp(-r(25)*(tc-r(24)).^2), ... % conv 2
-                    heaviside(tc).*(r(26)*exp(-r(27)*(tc))+r(28)*exp(-r(29)*(tc))+...
-                    r(30)*exp(-r(31)*(tc)).*cos(r(32)*tc-r(33))+ ...
-                    r(34)*exp(-r(35)*(tc)).*cos(r(36)*tc-r(37))+ ...
-                    r(38)*exp(-r(39)*(tc)).*cos(r(40)*tc-r(41))))+ ...
-                    conv(exp(-r(43)*(tc-r(42)).^2), ... % conv 3
-                    heaviside(tc).*(r(44)*exp(-r(45)*(tc))+r(46)*exp(-r(47)*(tc))+...
-                    r(48)*exp(-r(49)*(tc)).*cos(r(50)*tc-r(51))+ ...
-                    r(52)*exp(-r(53)*(tc)).*cos(r(54)*tc-r(55))+ ...
-                    r(56)*exp(-r(57)*(tc)).*cos(r(58)*tc-r(59)))) - sigint;
-                
-                % Fit setup - initial guesses
-                r0 = [1.3,0.05,0.02,1/2,0.02,1/10,... % first conv - center (ps), decay (ps^-2), amplitude, decay (1/ps), amp, decay (1/ps)
-                    0.1,0.1,0.5,0,... % beat 1 - amplitude, decay (1/ps), freq (rad/ps), phase (rad)
-                    0.1,0.1,0.5,0,... % beat 2
-                    0.1,0.1,0.5,0,... % beat 3
-                    0,0,0,0,0,... % baseline terms
-                    16,0.07,0.03,1/2,0.003,1/10,... % second conv
-                    0.1,0.1,0.5,0,...
-                    0.1,0.1,0.5,0,...
-                    0.1,0.1,0.5,0,...
-                    60,0.2,0.002,1/5,0,1/10,... % third conv
-                    0.1,0.1,0.5,0,...
-                    0.1,0.1,0.5,0,...
-                    0.1,0.1,0.5,0];
-                lb = [-10,0.01,0,1/100,0,1/100,... % lower bounds
-                    0,0,0,-180,... % default lifetime max = 100 ps
-                    0,0,0,-180,... % max IRF width = 8.3 ps (0.01)
-                    0,0,0,-180,...
-                    0,0,0,0,0,...
-                    10,0.01,0,1/100,0,1/100,... % second conv
-                    0,0,0,-180,...
-                    0,0,0,-180,...
-                    0,0,0,-180,...
-                    50,0.01,0,1/100,0,1/100,... % third conv
-                    0,0,0,-180,...
-                    0,0,0,-180,...
-                    0,0,0,-180];
-                ub = [20,1,9,1/0.1,9,1/0.1,... % upper bounds
-                    9,9,9,180,... % default lifetime min = 0.1 ps
-                    9,9,9,180,... % min IRF width = 0.83 ps (1)
-                    9,9,9,180,...
-                    9,9,9,9,9,...
-                    50,1,9,1/0.1,9,1/0.1,... % second conv
-                    9,9,9,180,...
-                    9,9,9,180,...
-                    9,9,9,180,...
-                    70,1,9,1/0.1,0,1/0.1,... % third conv
-                    9,9,9,180,...
-                    9,9,9,180,...
-                    9,9,9,180];
-                
-                % Pass baseline fit values to lifetime fit
-                if basefittype == 1 % linear baseline
-                    lb(21:23) = 0; ub(21:23) = 0; % mute exponential terms
-                    lb(19) = basecoef(1); ub(19) = lb(19);
-                    lb(20) = basecoef(2); ub(20) = lb(20);
-                end
-                if basefittype == 2 % exponential baseline
-                    lb(19) = 0; ub(19) = 0; % mute linear term
-                    lb(20) = basefit(1); ub(20) = lb(20);
-                    lb(21) = basefit(2); ub(21) = lb(21);
-                    lb(22) = basefit(3); ub(22) = lb(22);
-                    lb(23) = basefit(4); ub(23) = lb(23);
-                end
-                
-                lb(19:23) = 0; ub(19:23) = 0;
-                
-                % Implement fit options from config
-                if ltfittype == 1 % Gaussian*exp
-                    lb(5:18) = 0; ub(5:18) = 0;
-                end
-                if ltfittype == 2 % Gaussian*biexp
-                    lb(7:18) = 0; ub(7:18) = 0;
-                end
-                if ltfittype == 3 % Gaussian*exp with beating
-                    lb(5:6) = 0; ub(5:6) = 0;
-                end
-                if ltfittype < 5 % single peak
-                    lb(24:end) = 0; ub(24:end) = 0;
-                end
-                if ltfittype == 5 % two Gauss*exp
-                    lb([5:18 28:41]) = 0; ub([5:18 28:41]) = 0;
-                end
-                if ltfittype == 6 % Gauss*exp + Gauss*biexp
-                    lb([5:18 30:41]) = 0; ub([5:18 30:41]) = 0;
-                end
-                if ltfittype == 7 % two Gauss*biexp
-                    lb([7:18 30:41]) = 0; ub([7:18 30:41]) = 0;
-                end
-                if ltfittype == 8 % two beating Gauss*exp
-                    lb([5:6 28:29]) = 0; ub([5:6 28:29]) = 0;
-                end
-                if ltfittype == 9 % beating Gauss*exp + Gauss*biexp
-                    lb(5:6) = 0; ub(5:6) = 0;
-                end
-                if ltfittype < 11 % two peaks
-                    lb(42:end) = 0; ub(42:end) = 0;
-                end
-                if ltfittype == 11 % three Gauss*exp
-                    lb([5:18 28:41 46:59]) = 0; ub([5:18 28:41 46:59]) = 0;
-                end
-                if ltfittype == 12 % two Gauss*exp + Gauss*biexp (middle)
-                    lb([5:18 30:41 46:59]) = 0; ub([5:18 30:41 46:59]) = 0;
-                end
-                if ltfittype == 13 % two Gauss*biexp + Gauss*exp (middle)
-                    lb([7:18 28:41 48:59]) = 0; ub([7:18 28:41 48:59]) = 0;
-                end
-                if ltfittype == 14 % three Gauss*biexp
-                    lb([7:18 30:41 48:59]) = 0; ub([7:18 30:41 48:59]) = 0;
-                end
-                if numbeats > 0 % beating control
-                    if numbeats == 1
-                        lb([11:18 34:41 52:59]) = 0; ub([11:18 34:41 52:59]) = 0;
-                    end
-                    if numbeats == 2
-                        lb([15:18 38:41 56:59]) = 0; ub([15:18 38:41 56:59]) = 0;
-                    end
-                else % no beating
-                    lb([7:18 30:41 48:59]) = 0; ub([7:18 30:41 48:59]) = 0;
-                end
-
-                % Parameter constraints from config
-                if isempty(setpulsewidth) == 0 % pulse width was specified
-                    pulsedecay = log(2)/setpulsewidth^2;
-                    lb(2) = pulsedecay; ub(2) = pulsedecay;
-                end
-                if isempty(ltmin) == 0 % minimum lifetime was specified
-                    ub(4) = 1/ltmin; ub(6) = ub(4); % min lt -> ub decay
-                    ub(27) = ub(4); ub(29) = ub(4);
-                    ub(45) = ub(4); ub(47) = ub(4);
-                end
-                if isempty(ltmax) == 0 % maximum lifetime was specified
-                    lb(4) = 1/ltmax; lb(6) = lb(4); % max lt -> lb decay
-                    lb(27) = lb(4); lb(29) = lb(4);
-                    lb(45) = lb(4); lb(47) = lb(4);
-                end
-                
-                % Run lsqnonlin - minimizes error function by adjusting r
-                options=optimoptions(@lsqnonlin);
-                options.MaxFunctionEvaluations = 1e6; % let the fit run longer
-                options.MaxIterations = 1e6; % let the fit run longer
-                options.FunctionTolerance = 1e-12; % make the fit more accurate
-                options.OptimalityTolerance = 1e-12; % make the fit more accurate
-                options.StepTolerance = 1e-12; % make the fit more precise
-                options.Display = 'off'; % silence console output
-                fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
-            
-                % Generate curve for fitted parameters
-                fitcurve = conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
-                    heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
-                    fitval(5)*exp(-fitval(6)*(tc))+ ...
-                    fitval(7)*exp(-fitval(8)*(tc)).* ...
-                    cos(fitval(9)*tc-fitval(10))+ ...
-                    fitval(11)*exp(-fitval(12)*(tc)).* ...
-                    cos(fitval(13)*tc-fitval(14))+ ...
-                    fitval(15)*exp(-fitval(16)*(tc)).* ...
-                    cos(fitval(17)*tc-fitval(18))))+...
-                    fitval(19)*tint+fitval(20)+fitval(21)*... % baseline terms
-                    exp(-fitval(22)*(tint-fitval(23)))+...
-                    conv(exp(-fitval(25)*(tc-fitval(24)).^2),... % second conv
-                    heaviside(tc).*(fitval(26)*exp(-fitval(27)*(tc))+ ...
-                    fitval(28)*exp(-fitval(29)*(tc))+ ...
-                    fitval(30)*exp(-fitval(31)*(tc)).* ...
-                    cos(fitval(32)*tc-fitval(33))+ ...
-                    fitval(34)*exp(-fitval(35)*(tc)).* ...
-                    cos(fitval(36)*tc-fitval(37))+ ...
-                    fitval(38)*exp(-fitval(39)*(tc)).* ...
-                    cos(fitval(40)*tc-fitval(41))))+...
-                    conv(exp(-fitval(43)*(tc-fitval(42)).^2),... % third conv
-                    heaviside(tc).*(fitval(44)*exp(-fitval(45)*(tc))+ ...
-                    fitval(46)*exp(-fitval(47)*(tc))+ ...
-                    fitval(48)*exp(-fitval(49)*(tc)).* ...
-                    cos(fitval(50)*tc-fitval(51))+ ...
-                    fitval(52)*exp(-fitval(53)*(tc)).* ...
-                    cos(fitval(54)*tc-fitval(55))+ ...
-                    fitval(56)*exp(-fitval(57)*(tc)).* ...
-                    cos(fitval(58)*tc-fitval(59))));
-                
-                % Lifetime assignment - want τ3 < τ4, τ5 < τ6
-                lifetime3 = min(abs(1/fitval(27)),abs(1/fitval(29)));
-                lifetime4 = max(abs(1/fitval(27)),abs(1/fitval(29)));
-                lifetime5 = min(abs(1/fitval(45)),abs(1/fitval(47)));
-                lifetime6 = max(abs(1/fitval(45)),abs(1/fitval(47)));
-                if lifetime3 == Inf % possible from fit type options
-                    lifetime3 = 0;
-                end
-                if lifetime4 == Inf
-                    lifetime4 = 0;
-                end
-                if lifetime5 == Inf
-                    lifetime5 = 0;
-                end
-                if lifetime6 == Inf
-                    lifetime6 = 0;
-                end
-
-                % Decay ratios
-                if abs(1/fitval(27)) < abs(1/fitval(29))
-                    lt3lt4 = fitval(26)/fitval(28); % A3/A4
-                else % means 1/fitval(27) is longer
-                    lt3lt4 = fitval(28)/fitval(26); % still A3/A4
-                end
-                if abs(1/fitval(45)) < abs(1/fitval(47))
-                    lt5lt6 = fitval(44)/fitval(46); % A5/A6
-                else % means 1/fitval(45) is longer
-                    lt5lt6 = fitval(46)/fitval(44); % still A5/A6
-                end
-            else % single-peak fitting
-                % Define error function(r) as fit minus signal
-                fun = @(r) conv(exp(-r(2)*(tc-r(1)).^2), ...
-                    heaviside(tc).*(r(3)*exp(-r(4)*(tc))+r(5)*exp(-r(6)*(tc))+...
-                    r(7)*exp(-r(8)*(tc)).*cos(r(9)*tc-r(10))+ ...
-                    r(11)*exp(-r(12)*(tc)).*cos(r(13)*tc-r(14))+ ...
-                    r(15)*exp(-r(16)*(tc)).*cos(r(17)*tc-r(18))))+ ...
-                    r(19)*tint+r(20)+r(21)*exp(-r(22)*(tint-r(23))) - sigint;
-                
-                % Fit setup - initial guesses
-                r0 = [1.3,0.05,0.02,1/2,0.02,1/10,... % first conv - center (ps), decay (ps^-2), amplitude, decay (1/ps), amp, decay (1/ps)
-                    0.1,0.1,0.5,0,... % beat 1 - amplitude, decay (1/ps), freq (rad/ps), phase (rad)
-                    0.1,0.1,0.5,0,... % beat 2
-                    0.1,0.1,0.5,0,... % beat 3
-                    0,0,0,0,0];... % baseline terms
-                lb = [-10,0.01,0,1/100,0,1/100,... % lower bounds
-                    0,0,0,-180,... % default lifetime max = 100 ps
-                    0,0,0,-180,... % max IRF width = 8.3 ps (0.01)
-                    0,0,0,-180,...
-                    0,0,0,0,0];
-                ub = [20,1,9,1/0.1,9,1/0.1,... % upper bounds
-                    9,9,9,180,... % default lifetime min = 0.1 ps
-                    0,9,9,180,... % min IRF width = 0.83 ps (1)
-                    0,9,9,180,...
-                    9,9,9,9,9];
-                
-                % Pass baseline fit values to lifetime fit
-                if basefittype == 1 % linear baseline
-                    lb(21:23) = 0; ub(21:23) = 0; % mute exponential terms
-                    lb(19) = basecoef(1); ub(19) = lb(19);
-                    lb(20) = basecoef(2); ub(20) = lb(20);
-                    r0(19) = basecoef(1); r0(20) = basecoef(2);
-                end
-                if basefittype == 2 % exponential baseline
-                    lb(19) = 0; ub(19) = 0; % mute linear term
-                    lb(20) = basefit(1); ub(20) = lb(20);
-                    lb(21) = basefit(2); ub(21) = lb(21);
-                    lb(22) = basefit(3); ub(22) = lb(22);
-                    lb(23) = basefit(4); ub(23) = lb(23);
-                    r0(20) = basefit(1); r0(21) = basefit(2);
-                    r0(22) = basefit(3); r0(23) = basefit(4);
-                end
-                
-                % Baseline removed
-                lb(19:23) = 0; ub(19:23) = 0;
-
-                % Implement fit options from config
-                if ltfittype == 1 % Gaussian*exp
-                    lb(5:18) = 0; ub(5:18) = 0;
-                end
-                if ltfittype == 2 % Gaussian*biexp
-                    lb(7:18) = 0; ub(7:18) = 0;
-                end
-                if ltfittype == 3 % Gaussian*exp with beating
-                    lb(5:6) = 0; ub(5:6) = 0;
-                end
-                lb(24:end) = 0; ub(24:end) = 0; % single peak
-                if numbeats > 0 % beating control
-                    if numbeats == 1
-                        lb(11:18) = 0; ub(11:18) = 0;
-                    end
-                    if numbeats == 2
-                        lb(15:18) = 0; ub(15:18) = 0;
-                    end
-                else % no beating
-                    lb(7:18) = 0; ub(7:18) = 0;
-                end
-
-                % Parameter constraints from config
-                if isempty(setpulsewidth) == 0 % pulse width was specified
-                    pulsedecay = log(2)/setpulsewidth^2;
-                    lb(2) = pulsedecay; ub(2) = pulsedecay;
-                end
-                if isempty(ltmin) == 0 % minimum lifetime was specified
-                    ub(4) = 1/ltmin; ub(6) = ub(4); % min lt -> ub decay
-                end
-                if isempty(ltmax) == 0 % maximum lifetime was specified
-                    lb(4) = 1/ltmax; lb(6) = lb(4); % max lt -> lb decay
-                end
-                
-                % Run lsqnonlin - minimizes error function by adjusting r
-                options=optimoptions(@lsqnonlin);
-                options.MaxFunctionEvaluations = 1e6; % let the fit run longer
-                options.MaxIterations = 1e6; % let the fit run longer
-                options.FunctionTolerance = 1e-12; % make the fit more accurate
-                options.OptimalityTolerance = 1e-12; % make the fit more accurate
-                options.StepTolerance = 1e-12; % make the fit more precise
-                options.Display = 'off'; % silence console output
-                fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
-            
-                % Generate curve for fitted parameters
-                fitcurve = conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
-                    heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
-                    fitval(5)*exp(-fitval(6)*(tc))+ ...
-                    fitval(7)*exp(-fitval(8)*(tc)).* ...
-                    cos(fitval(9)*tc-fitval(10))+ ...
-                    fitval(11)*exp(-fitval(12)*(tc)).* ...
-                    cos(fitval(13)*tc-fitval(14))+ ...
-                    fitval(15)*exp(-fitval(16)*(tc)).* ...
-                    cos(fitval(17)*tc-fitval(18))))+...
-                    fitval(19)*tint+fitval(20)+fitval(21)*... % baseline terms
-                    exp(-fitval(22)*(tint-fitval(23)));
-
-                lifetime3 = 0; lifetime4 = 0; lt3lt4 = 0;
-                lifetime5 = 0; lifetime6 = 0; lt5lt6 = 0;
-            end
-            
-            % Lifetime assignment - want τ1 < τ2
-            lifetime1 = min(abs(1/fitval(4)),abs(1/fitval(6)));
-            lifetime2 = max(abs(1/fitval(4)),abs(1/fitval(6)));
-            if lifetime1 == Inf % possible from fit type options
-                lifetime1 = 0;
-            end
-            if lifetime2 == Inf
-                lifetime2 = 0;
-            end
-            % Decay ratio
-            if abs(1/fitval(4)) < abs(1/fitval(6))
-                lt1lt2 = fitval(3)/fitval(5); % A1/A2
-            else % means 1/fitval(4) is longer
-                lt1lt2 = fitval(5)/fitval(3); % still A1/A2
+            onepkfn = @(r) r(1)*tint+r(2)+r(3)*exp(-r(4)*(tint-r(5)))+ ... % baseline
+                conv(exp(-r(6)*(tc-r(7)).^2), ... % conv
+                heaviside(tc).*(r(8)*exp(-r(9)*(tc))+r(10)*exp(-r(11)*(tc)))) - sigint;
+            twopkfn = @(r) r(1)*tint+r(2)+r(3)*exp(-r(4)*(tint-r(5)))+ ... % baseline
+                conv(exp(-r(6)*(tc-r(7)).^2), ... % conv 1
+                heaviside(tc).*(r(8)*exp(-r(9)*(tc))+r(10)*exp(-r(11)*(tc))))+ ...
+                conv(exp(-r(12)*(tc-r(13)).^2), ... % conv 2
+                heaviside(tc).*(r(14)*exp(-r(15)*(tc))+r(16)*exp(-r(17)*(tc)))) - sigint;
+            threepkfn = @(r) r(1)*tint+r(2)+r(3)*exp(-r(4)*(tint-r(5)))+ ... % baseline
+                conv(exp(-r(6)*(tc-r(7)).^2), ... % conv 1
+                heaviside(tc).*(r(8)*exp(-r(9)*(tc))+r(10)*exp(-r(11)*(tc))))+ ...
+                conv(exp(-r(12)*(tc-r(13)).^2), ... % conv 2
+                heaviside(tc).*(r(14)*exp(-r(15)*(tc))+r(16)*exp(-r(17)*(tc))))+ ...
+                conv(exp(-r(18)*(tc-r(19)).^2), ... % conv 3
+                heaviside(tc).*(r(20)*exp(-r(21)*(tc))+r(22)*exp(-r(23)*(tc)))) - sigint;
+            % depending on ltfittype, assign fun to shortfn or longfn
+%%%%%%%%%%%%%%%%%%
+            if ltfittype < 5
+                fun = onepkfn;
             end
 
-            % Return to original length and sign
-            %figure; plot(tint,sigint,tint,fitcurve);
-            tint = tint(1:originallength);
-            sigint = sigint(1:originallength);
-            fitcurve = fitcurve(1:originallength);
-            sigint = basecurve+sigsign*sigint(1:originallength);
-            fitcurve = basecurve+sigsign*fitcurve(1:originallength);
-            %figure; plot(tint,sigint);
 
-            % Calculate residuals, ssresid, and IRF FWHM
-            resid = sigint-fitcurve;
-            ssresid = sum(resid.^2); % sum of squares of residuals
-            tss = sum((sigint-mean(sigint)).^2); % total sum of squares
-            r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
-            if r2 < 0 % remove nonsense R^2 values
-                r2 = 0;
-            end
-            FWHM = sqrt(log(2)/fitval(2)); % pulse width, ps
-        else % no lifetime fitting
-            tint = t; sigint = signal; fitcurve = signal;
-            lifetime1 = 0; lifetime2 = 0; lt1lt2 = 0;
-            lifetime3 = 0; lifetime4 = 0; lt3lt4 = 0;
-            lifetime5 = 0; lifetime6 = 0; lt5lt6 = 0;
-            fitval = zeros(59,1); r2 = 0; FWHM = 0;
+
+        %     if ltfittype > 4
+        %         % Define error function(r) as fit minus signal
+        %         fun = @(r) conv(exp(-r(2)*(tc-r(1)).^2), ... % conv 1
+        %             heaviside(tc).*(r(3)*exp(-r(4)*(tc))+r(5)*exp(-r(6)*(tc))+...
+        %             r(7)*exp(-r(8)*(tc)).*cos(r(9)*tc-r(10))+ ...
+        %             r(11)*exp(-r(12)*(tc)).*cos(r(13)*tc-r(14))+ ...
+        %             r(15)*exp(-r(16)*(tc)).*cos(r(17)*tc-r(18))))+ ...
+        %             r(19)*tint+r(20)+r(21)*exp(-r(22)*(tint-r(23)))+ ... % baseline
+        %             conv(exp(-r(25)*(tc-r(24)).^2), ... % conv 2
+        %             heaviside(tc).*(r(26)*exp(-r(27)*(tc))+r(28)*exp(-r(29)*(tc))+...
+        %             r(30)*exp(-r(31)*(tc)).*cos(r(32)*tc-r(33))+ ...
+        %             r(34)*exp(-r(35)*(tc)).*cos(r(36)*tc-r(37))+ ...
+        %             r(38)*exp(-r(39)*(tc)).*cos(r(40)*tc-r(41))))+ ...
+        %             conv(exp(-r(43)*(tc-r(42)).^2), ... % conv 3
+        %             heaviside(tc).*(r(44)*exp(-r(45)*(tc))+r(46)*exp(-r(47)*(tc))+...
+        %             r(48)*exp(-r(49)*(tc)).*cos(r(50)*tc-r(51))+ ...
+        %             r(52)*exp(-r(53)*(tc)).*cos(r(54)*tc-r(55))+ ...
+        %             r(56)*exp(-r(57)*(tc)).*cos(r(58)*tc-r(59)))) - sigint;
+        % 
+        %         % Fit setup - initial guesses
+        %         r0 = [1.3,0.05,0.02,1/2,0.02,1/10,... % first conv - center (ps), decay (ps^-2), amplitude, decay (1/ps), amp, decay (1/ps)
+        %             0.1,0.1,0.5,0,... % beat 1 - amplitude, decay (1/ps), freq (rad/ps), phase (rad)
+        %             0.1,0.1,0.5,0,... % beat 2
+        %             0.1,0.1,0.5,0,... % beat 3
+        %             0,0,0,0,0,... % baseline terms
+        %             16,0.07,0.03,1/2,0.003,1/10,... % second conv
+        %             0.1,0.1,0.5,0,...
+        %             0.1,0.1,0.5,0,...
+        %             0.1,0.1,0.5,0,...
+        %             60,0.2,0.002,1/5,0,1/10,... % third conv
+        %             0.1,0.1,0.5,0,...
+        %             0.1,0.1,0.5,0,...
+        %             0.1,0.1,0.5,0];
+        %         lb = [-10,0.01,0,1/100,0,1/100,... % lower bounds
+        %             0,0,0,-180,... % default lifetime max = 100 ps
+        %             0,0,0,-180,... % max IRF width = 8.3 ps (0.01)
+        %             0,0,0,-180,...
+        %             0,0,0,0,0,...
+        %             10,0.01,0,1/100,0,1/100,... % second conv
+        %             0,0,0,-180,...
+        %             0,0,0,-180,...
+        %             0,0,0,-180,...
+        %             50,0.01,0,1/100,0,1/100,... % third conv
+        %             0,0,0,-180,...
+        %             0,0,0,-180,...
+        %             0,0,0,-180];
+        %         ub = [20,1,9,1/0.1,9,1/0.1,... % upper bounds
+        %             9,9,9,180,... % default lifetime min = 0.1 ps
+        %             9,9,9,180,... % min IRF width = 0.83 ps (1)
+        %             9,9,9,180,...
+        %             9,9,9,9,9,...
+        %             50,1,9,1/0.1,9,1/0.1,... % second conv
+        %             9,9,9,180,...
+        %             9,9,9,180,...
+        %             9,9,9,180,...
+        %             70,1,9,1/0.1,0,1/0.1,... % third conv
+        %             9,9,9,180,...
+        %             9,9,9,180,...
+        %             9,9,9,180];
+        % 
+        %         % Pass baseline fit values to lifetime fit
+        %         if basefittype == 1 % linear baseline
+        %             lb(21:23) = 0; ub(21:23) = 0; % mute exponential terms
+        %             lb(19) = basecoef(1); ub(19) = lb(19);
+        %             lb(20) = basecoef(2); ub(20) = lb(20);
+        %         end
+        %         if basefittype == 2 % exponential baseline
+        %             lb(19) = 0; ub(19) = 0; % mute linear term
+        %             lb(20) = basefit(1); ub(20) = lb(20);
+        %             lb(21) = basefit(2); ub(21) = lb(21);
+        %             lb(22) = basefit(3); ub(22) = lb(22);
+        %             lb(23) = basefit(4); ub(23) = lb(23);
+        %         end
+        % 
+        %         lb(19:23) = 0; ub(19:23) = 0;
+        % 
+        %         % Implement fit options from config
+        %         if ltfittype == 1 % Gaussian*exp
+        %             lb(5:18) = 0; ub(5:18) = 0;
+        %         end
+        %         if ltfittype == 2 % Gaussian*biexp
+        %             lb(7:18) = 0; ub(7:18) = 0;
+        %         end
+        %         if ltfittype == 3 % Gaussian*exp with beating
+        %             lb(5:6) = 0; ub(5:6) = 0;
+        %         end
+        %         if ltfittype < 5 % single peak
+        %             lb(24:end) = 0; ub(24:end) = 0;
+        %         end
+        %         if ltfittype == 5 % two Gauss*exp
+        %             lb([5:18 28:41]) = 0; ub([5:18 28:41]) = 0;
+        %         end
+        %         if ltfittype == 6 % Gauss*exp + Gauss*biexp
+        %             lb([5:18 30:41]) = 0; ub([5:18 30:41]) = 0;
+        %         end
+        %         if ltfittype == 7 % two Gauss*biexp
+        %             lb([7:18 30:41]) = 0; ub([7:18 30:41]) = 0;
+        %         end
+        %         if ltfittype == 8 % two beating Gauss*exp
+        %             lb([5:6 28:29]) = 0; ub([5:6 28:29]) = 0;
+        %         end
+        %         if ltfittype == 9 % beating Gauss*exp + Gauss*biexp
+        %             lb(5:6) = 0; ub(5:6) = 0;
+        %         end
+        %         if ltfittype < 11 % two peaks
+        %             lb(42:end) = 0; ub(42:end) = 0;
+        %         end
+        %         if ltfittype == 11 % three Gauss*exp
+        %             lb([5:18 28:41 46:59]) = 0; ub([5:18 28:41 46:59]) = 0;
+        %         end
+        %         if ltfittype == 12 % two Gauss*exp + Gauss*biexp (middle)
+        %             lb([5:18 30:41 46:59]) = 0; ub([5:18 30:41 46:59]) = 0;
+        %         end
+        %         if ltfittype == 13 % two Gauss*biexp + Gauss*exp (middle)
+        %             lb([7:18 28:41 48:59]) = 0; ub([7:18 28:41 48:59]) = 0;
+        %         end
+        %         if ltfittype == 14 % three Gauss*biexp
+        %             lb([7:18 30:41 48:59]) = 0; ub([7:18 30:41 48:59]) = 0;
+        %         end
+        %         if numbeats > 0 % beating control
+        %             if numbeats == 1
+        %                 lb([11:18 34:41 52:59]) = 0; ub([11:18 34:41 52:59]) = 0;
+        %             end
+        %             if numbeats == 2
+        %                 lb([15:18 38:41 56:59]) = 0; ub([15:18 38:41 56:59]) = 0;
+        %             end
+        %         else % no beating
+        %             lb([7:18 30:41 48:59]) = 0; ub([7:18 30:41 48:59]) = 0;
+        %         end
+        % 
+        %         % Parameter constraints from config
+        %         if isempty(setpulsewidth) == 0 % pulse width was specified
+        %             pulsedecay = log(2)/setpulsewidth^2;
+        %             lb(2) = pulsedecay; ub(2) = pulsedecay;
+        %         end
+        %         if isempty(ltmin) == 0 % minimum lifetime was specified
+        %             ub(4) = 1/ltmin; ub(6) = ub(4); % min lt -> ub decay
+        %             ub(27) = ub(4); ub(29) = ub(4);
+        %             ub(45) = ub(4); ub(47) = ub(4);
+        %         end
+        %         if isempty(ltmax) == 0 % maximum lifetime was specified
+        %             lb(4) = 1/ltmax; lb(6) = lb(4); % max lt -> lb decay
+        %             lb(27) = lb(4); lb(29) = lb(4);
+        %             lb(45) = lb(4); lb(47) = lb(4);
+        %         end
+        % 
+        %         % Run lsqnonlin - minimizes error function by adjusting r
+        %         options=optimoptions(@lsqnonlin);
+        %         options.MaxFunctionEvaluations = 1e6; % let the fit run longer
+        %         options.MaxIterations = 1e6; % let the fit run longer
+        %         options.FunctionTolerance = 1e-12; % make the fit more accurate
+        %         options.OptimalityTolerance = 1e-12; % make the fit more accurate
+        %         options.StepTolerance = 1e-12; % make the fit more precise
+        %         options.Display = 'off'; % silence console output
+        %         fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
+        % 
+        %         % Generate curve for fitted parameters
+        %         fitcurve = conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
+        %             heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
+        %             fitval(5)*exp(-fitval(6)*(tc))+ ...
+        %             fitval(7)*exp(-fitval(8)*(tc)).* ...
+        %             cos(fitval(9)*tc-fitval(10))+ ...
+        %             fitval(11)*exp(-fitval(12)*(tc)).* ...
+        %             cos(fitval(13)*tc-fitval(14))+ ...
+        %             fitval(15)*exp(-fitval(16)*(tc)).* ...
+        %             cos(fitval(17)*tc-fitval(18))))+...
+        %             fitval(19)*tint+fitval(20)+fitval(21)*... % baseline terms
+        %             exp(-fitval(22)*(tint-fitval(23)))+...
+        %             conv(exp(-fitval(25)*(tc-fitval(24)).^2),... % second conv
+        %             heaviside(tc).*(fitval(26)*exp(-fitval(27)*(tc))+ ...
+        %             fitval(28)*exp(-fitval(29)*(tc))+ ...
+        %             fitval(30)*exp(-fitval(31)*(tc)).* ...
+        %             cos(fitval(32)*tc-fitval(33))+ ...
+        %             fitval(34)*exp(-fitval(35)*(tc)).* ...
+        %             cos(fitval(36)*tc-fitval(37))+ ...
+        %             fitval(38)*exp(-fitval(39)*(tc)).* ...
+        %             cos(fitval(40)*tc-fitval(41))))+...
+        %             conv(exp(-fitval(43)*(tc-fitval(42)).^2),... % third conv
+        %             heaviside(tc).*(fitval(44)*exp(-fitval(45)*(tc))+ ...
+        %             fitval(46)*exp(-fitval(47)*(tc))+ ...
+        %             fitval(48)*exp(-fitval(49)*(tc)).* ...
+        %             cos(fitval(50)*tc-fitval(51))+ ...
+        %             fitval(52)*exp(-fitval(53)*(tc)).* ...
+        %             cos(fitval(54)*tc-fitval(55))+ ...
+        %             fitval(56)*exp(-fitval(57)*(tc)).* ...
+        %             cos(fitval(58)*tc-fitval(59))));
+        % 
+        %         % Lifetime assignment - want τ3 < τ4, τ5 < τ6
+        %         lifetime3 = min(abs(1/fitval(27)),abs(1/fitval(29)));
+        %         lifetime4 = max(abs(1/fitval(27)),abs(1/fitval(29)));
+        %         lifetime5 = min(abs(1/fitval(45)),abs(1/fitval(47)));
+        %         lifetime6 = max(abs(1/fitval(45)),abs(1/fitval(47)));
+        %         if lifetime3 == Inf % possible from fit type options
+        %             lifetime3 = 0;
+        %         end
+        %         if lifetime4 == Inf
+        %             lifetime4 = 0;
+        %         end
+        %         if lifetime5 == Inf
+        %             lifetime5 = 0;
+        %         end
+        %         if lifetime6 == Inf
+        %             lifetime6 = 0;
+        %         end
+        % 
+        %         % Decay ratios
+        %         if abs(1/fitval(27)) < abs(1/fitval(29))
+        %             lt3lt4 = fitval(26)/fitval(28); % A3/A4
+        %         else % means 1/fitval(27) is longer
+        %             lt3lt4 = fitval(28)/fitval(26); % still A3/A4
+        %         end
+        %         if abs(1/fitval(45)) < abs(1/fitval(47))
+        %             lt5lt6 = fitval(44)/fitval(46); % A5/A6
+        %         else % means 1/fitval(45) is longer
+        %             lt5lt6 = fitval(46)/fitval(44); % still A5/A6
+        %         end
+        %     else % single-peak fitting
+        %         % Define error function(r) as fit minus signal
+        %         fun = @(r) conv(exp(-r(2)*(tc-r(1)).^2), ...
+        %             heaviside(tc).*(r(3)*exp(-r(4)*(tc))+r(5)*exp(-r(6)*(tc))+...
+        %             r(7)*exp(-r(8)*(tc)).*cos(r(9)*tc-r(10))+ ...
+        %             r(11)*exp(-r(12)*(tc)).*cos(r(13)*tc-r(14))+ ...
+        %             r(15)*exp(-r(16)*(tc)).*cos(r(17)*tc-r(18))))+ ...
+        %             r(19)*tint+r(20)+r(21)*exp(-r(22)*(tint-r(23))) - sigint;
+        % 
+        %         % Fit setup - initial guesses
+        %         r0 = [1.3,0.05,0.02,1/2,0.02,1/10,... % first conv - center (ps), decay (ps^-2), amplitude, decay (1/ps), amp, decay (1/ps)
+        %             0.1,0.1,0.5,0,... % beat 1 - amplitude, decay (1/ps), freq (rad/ps), phase (rad)
+        %             0.1,0.1,0.5,0,... % beat 2
+        %             0.1,0.1,0.5,0,... % beat 3
+        %             0,0,0,0,0];... % baseline terms
+        %         lb = [-10,0.01,-9,1/100,-9,1/100,... % lower bounds
+        %             0,0,0,-180,... % default lifetime max = 100 ps
+        %             0,0,0,-180,... % max IRF width = 8.3 ps (0.01)
+        %             0,0,0,-180,...
+        %             -9,-9,-9,-9,-9];
+        %         ub = [20,1,9,1/0.1,9,1/0.1,... % upper bounds
+        %             9,9,9,180,... % default lifetime min = 0.1 ps
+        %             9,9,9,180,... % min IRF width = 0.83 ps (1)
+        %             9,9,9,180,...
+        %             9,9,9,9,9];
+        % 
+        %         % Pass baseline fit values to lifetime fit
+        %         if basefittype == 1 % linear baseline
+        %             lb(21:23) = 0; ub(21:23) = 0; % mute exponential terms
+        %             r0(19) = basecoef(1); r0(20) = basecoef(2);
+        %         end
+        %         if basefittype == 2 % exponential baseline
+        %             lb(19) = 0; ub(19) = 0; % mute linear term
+        %             r0(20) = basefit(1); r0(21) = basefit(2);
+        %             r0(22) = basefit(3); r0(23) = basefit(4);
+        %         end
+        %         if basefittype == 3 % exp + linear baseline
+        %             r0(20) = basefit(1); r0(21) = basefit(2);
+        %             r0(22) = basefit(3); r0(23) = basefit(4);
+        %             r0(19) = basecoef(5);
+        %         end
+        % 
+        %         % Implement fit options from config
+        %         if ltfittype == 1 % Gaussian*exp
+        %             lb(5:18) = 0; ub(5:18) = 0;
+        %         end
+        %         if ltfittype == 2 % Gaussian*biexp
+        %             lb(7:18) = 0; ub(7:18) = 0;
+        %         end
+        %         if ltfittype == 3 % Gaussian*exp with beating
+        %             lb(5:6) = 0; ub(5:6) = 0;
+        %         end
+        %         if numbeats > 0 % beating control
+        %             if numbeats == 1
+        %                 lb(11:18) = 0; ub(11:18) = 0;
+        %             end
+        %             if numbeats == 2
+        %                 lb(15:18) = 0; ub(15:18) = 0;
+        %             end
+        %         else % no beating
+        %             lb(7:18) = 0; ub(7:18) = 0;
+        %         end
+        % 
+        %         % Parameter constraints from config
+        %         if isempty(setpulsewidth) == 0 % pulse width was specified
+        %             pulsedecay = log(2)/setpulsewidth^2;
+        %             lb(2) = pulsedecay; ub(2) = pulsedecay;
+        %         end
+        %         if isempty(ltmin) == 0 % minimum lifetime was specified
+        %             ub(4) = 1/ltmin; ub(6) = ub(4); % min lt -> ub decay
+        %         end
+        %         if isempty(ltmax) == 0 % maximum lifetime was specified
+        %             lb(4) = 1/ltmax; lb(6) = lb(4); % max lt -> lb decay
+        %         end
+        % 
+        %         % Run lsqnonlin - minimizes error function by adjusting r
+        %         options=optimoptions(@lsqnonlin);
+        %         options.MaxFunctionEvaluations = 1e6; % let the fit run longer
+        %         options.MaxIterations = 1e6; % let the fit run longer
+        %         options.FunctionTolerance = 1e-12; % make the fit more accurate
+        %         options.OptimalityTolerance = 1e-12; % make the fit more accurate
+        %         options.StepTolerance = 1e-12; % make the fit more precise
+        %         options.Display = 'off'; % silence console output
+        %         fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
+        % 
+        %         % Generate curve for fitted parameters
+        %         fitcurve = conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
+        %             heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
+        %             fitval(5)*exp(-fitval(6)*(tc))+ ...
+        %             fitval(7)*exp(-fitval(8)*(tc)).* ...
+        %             cos(fitval(9)*tc-fitval(10))+ ...
+        %             fitval(11)*exp(-fitval(12)*(tc)).* ...
+        %             cos(fitval(13)*tc-fitval(14))+ ...
+        %             fitval(15)*exp(-fitval(16)*(tc)).* ...
+        %             cos(fitval(17)*tc-fitval(18))))+...
+        %             fitval(19)*tint+fitval(20)+fitval(21)*... % baseline terms
+        %             exp(-fitval(22)*(tint-fitval(23)));
+        % 
+        %         lifetime3 = 0; lifetime4 = 0; lt3lt4 = 0;
+        %         lifetime5 = 0; lifetime6 = 0; lt5lt6 = 0;
+        %     end
+        % 
+        %     % Lifetime assignment - want τ1 < τ2
+        %     lifetime1 = min(abs(1/fitval(4)),abs(1/fitval(6)));
+        %     lifetime2 = max(abs(1/fitval(4)),abs(1/fitval(6)));
+        %     if lifetime1 == Inf % possible from fit type options
+        %         lifetime1 = 0;
+        %     end
+        %     if lifetime2 == Inf
+        %         lifetime2 = 0;
+        %     end
+        %     % Decay ratio
+        %     if abs(1/fitval(4)) < abs(1/fitval(6))
+        %         lt1lt2 = fitval(3)/fitval(5); % A1/A2
+        %     else % means 1/fitval(4) is longer
+        %         lt1lt2 = fitval(5)/fitval(3); % still A1/A2
+        %     end
+        % 
+        %     % Return to original length and sign
+        %     %figure; plot(tint,sigint,tint,fitcurve);
+        %     tint = tint(1:originallength);
+        %     sigint = sigint(1:originallength);
+        %     fitcurve = fitcurve(1:originallength);
+        %     %sigint = basecurve+sigsign*sigint(1:originallength);
+        %     %fitcurve = basecurve+sigsign*fitcurve(1:originallength);
+        %     %figure; plot(tint,sigint);
+        % 
+        %     % Calculate residuals, ssresid, and IRF FWHM
+        %     resid = sigint-fitcurve;
+        %     ssresid = sum(resid.^2); % sum of squares of residuals
+        %     tss = sum((sigint-mean(sigint)).^2); % total sum of squares
+        %     r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
+        %     if r2 < 0 % remove nonsense R^2 values
+        %         r2 = 0;
+        %     end
+        %     FWHM = sqrt(log(2)/fitval(2)); % pulse width, ps
+        % else % no lifetime fitting
+        %     tint = t; sigint = signal; fitcurve = signal;
+        %     lifetime1 = 0; lifetime2 = 0; lt1lt2 = 0;
+        %     lifetime3 = 0; lifetime4 = 0; lt3lt4 = 0;
+        %     lifetime5 = 0; lifetime6 = 0; lt5lt6 = 0;
+        %     fitval = zeros(59,1); r2 = 0; FWHM = 0;
         end
         
         if filetype == 3
@@ -928,7 +947,6 @@ for iii=startiii:imagesize(1)
         end
         
         % Make rounded strings for figure annotation
-        sDCbleachrate = string(sprintf('%0.2g',DCbleachrate)); % round to 2 sig figs
         lt1 = string(round(10*lifetime1)/10); % round to nearest 0.1 ps
         lt2 = string(round(10*lifetime2)/10);
         if numbeats == 3 % make beating annotation
@@ -959,6 +977,7 @@ for iii=startiii:imagesize(1)
                 annotdim = [0.35 0.6 0.2 0.2];
             end
             if pairedDCAC > 0
+                sDCbleachrate = string(sprintf('%0.2g',DCbleachrate)); % round to 2 sig figs
                 annot(length(annot)+1) = {'bleach = '+...
                     sDCbleachrate+' ps^{-1}'};
             end
@@ -1070,38 +1089,38 @@ if writefigsyn == 1 & filetype == 3 % write processed image tif
         lt2array,ssresidarray,FWHMarray,r2array)
 end
 
-conv1curve = basecurve+conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
-    heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
-    fitval(5)*exp(-fitval(6)*(tc))+ ...
-    fitval(7)*exp(-fitval(8)*(tc)).* ...
-    cos(fitval(9)*tc-fitval(10))+ ...
-    fitval(11)*exp(-fitval(12)*(tc)).* ...
-    cos(fitval(13)*tc-fitval(14))+ ...
-    fitval(15)*exp(-fitval(16)*(tc)).* ...
-    cos(fitval(17)*tc-fitval(18))));
-conv2curve = basecurve+conv(exp(-fitval(25)*(tc-fitval(24)).^2),... % second conv
-    heaviside(tc).*(fitval(26)*exp(-fitval(27)*(tc))+ ...
-    fitval(28)*exp(-fitval(29)*(tc))+ ...
-    fitval(30)*exp(-fitval(31)*(tc)).* ...
-    cos(fitval(32)*tc-fitval(33))+ ...
-    fitval(34)*exp(-fitval(35)*(tc)).* ...
-    cos(fitval(36)*tc-fitval(37))+ ...
-    fitval(38)*exp(-fitval(39)*(tc)).* ...
-    cos(fitval(40)*tc-fitval(41))));
-
-legend2 = legend1;
-legend2(end+1) = {'Curve 1'};
-legend2(end+1) = {'Curve 2'};
-
-figure;
-hold on; errorbar(t,signal,sigsds,'o')
-plot(tbase,sigbase,'go',t,basecurve,'-'); 
-plot(tint,fitcurve,'-','LineWidth',2);
-plot(tint,conv1curve,'--','LineWidth',2);
-plot(tint,conv2curve,'r--','LineWidth',2);
-hold off;
-xlabel('Time (ps)'); ylabel('AC signal (AU)');
-legend(legend2);
+% conv1curve = basecurve+conv(exp(-fitval(2)*(tc-fitval(1)).^2),... % first conv
+%     heaviside(tc).*(fitval(3)*exp(-fitval(4)*(tc))+ ...
+%     fitval(5)*exp(-fitval(6)*(tc))+ ...
+%     fitval(7)*exp(-fitval(8)*(tc)).* ...
+%     cos(fitval(9)*tc-fitval(10))+ ...
+%     fitval(11)*exp(-fitval(12)*(tc)).* ...
+%     cos(fitval(13)*tc-fitval(14))+ ...
+%     fitval(15)*exp(-fitval(16)*(tc)).* ...
+%     cos(fitval(17)*tc-fitval(18))));
+% conv2curve = basecurve+conv(exp(-fitval(25)*(tc-fitval(24)).^2),... % second conv
+%     heaviside(tc).*(fitval(26)*exp(-fitval(27)*(tc))+ ...
+%     fitval(28)*exp(-fitval(29)*(tc))+ ...
+%     fitval(30)*exp(-fitval(31)*(tc)).* ...
+%     cos(fitval(32)*tc-fitval(33))+ ...
+%     fitval(34)*exp(-fitval(35)*(tc)).* ...
+%     cos(fitval(36)*tc-fitval(37))+ ...
+%     fitval(38)*exp(-fitval(39)*(tc)).* ...
+%     cos(fitval(40)*tc-fitval(41))));
+% 
+% legend2 = legend1;
+% legend2(end+1) = {'Curve 1'};
+% legend2(end+1) = {'Curve 2'};
+% 
+% figure;
+% hold on; errorbar(t,signal,sigsds,'o')
+% plot(tbase,sigbase,'go',t,basecurve,'-'); 
+% plot(tint,fitcurve,'-','LineWidth',2);
+% plot(tint,conv1curve,'--','LineWidth',2);
+% plot(tint,conv2curve,'r--','LineWidth',2);
+% hold off;
+% xlabel('Time (ps)'); ylabel('AC signal (AU)');
+% legend(legend2);
 
 % % FFT of residuals
 % dtp = abs(tint(1)-tint(2)); % time step, ps
