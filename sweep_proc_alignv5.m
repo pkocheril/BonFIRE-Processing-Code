@@ -7,31 +7,33 @@
 %%% v3 - padding signal for fitting, fitting negative peaks, SPCM + PMT
 %%%%%%%%%%%%
 %%% v4 - updated fitting based on fit_temp_sweepv1 (big overhaul!)
+%%% v5 - added pulse width to summary on PNGs, added import from .raw
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2023_09_28'
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2023_10_09'
 clear; clc; close all;
 
 % Configuration options - check before running!
 loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
-testrun = 1; % 0 = process all, 1 = test run with a few files,
+testrun = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
 testfilesperfolder = 1; % number of files to test per folder (default 1)
-targetfolders = 1:13; % indices of folders to process, [] = dialog
-filetype = 2; % 1 = .txt, 2 = .tif (solution), 3 = .tif (image)
+targetfolders = 2:7; % indices of folders to process, [] = dialog
+filetype = 4; % 1 = .txt, 2 = .tif (solution), 3 = .tif (image), 
+% 4 = .raw (solution), 5 = .raw (image)
 filenameconv = 2; % 0 = other,
 % 1 = [pumpWL]-[pumppower]-[signalWL]-[IRpower]-[ND]-[PMTgain]-[modfreq]-[PMTBW]-[etc],
 % 2 = [etc]_[size]_[idler]_[DFG]_[power]_[channel],
 % 3 = [IRWN]_[probeWL]_[etc]_[size]_[idler]_[DFG]_[power]_[channel],
 % 4 = [probeWL]_[IRWN]_[etc]_[size]_[idler]_[DFG]_[power]_[channel]
-t0pos = []; % specify t0 position (mm), [] = autofind
-pairedDCAC = 0; % 2 = SPCM + PMT CH2, 1 = PMT CH1 + CH2, 0 = only PMT CH2
+t0pos = 191.375; % specify t0 position (mm), [] = autofind
+pairedDCAC = 1; % 2 = SPCM + PMT CH2, 1 = PMT CH1 + CH2, 0 = only PMT CH2
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 tempmod = 0; % 1 = temporal modulation in place, 0 = no beamsplitters
-ND = 2; % ND filter strength in probe path (script will update if possible)
+ND = 0; % ND filter strength in probe path (script will update if possible)
 PMT = 1; % PMT gain (norm to 1, script will update if possible)
 prbpowerset = 250; % probe power in mW (script will update if possible)
 IRpowerset = 70; % IR power in mW (script will update if possible)
@@ -158,9 +160,9 @@ indrDCbleach = indrDCnoise+1; % 28 - minimum value of maxTlength
 if loadprevious == 0 % run new analysis
     if filetype == 3 % for image data
         writefigsyn = 0; % don't write individual figures
-        if powernormyn > 2 % don't do photobleach correction
-            powernormyn = 2;
-        end
+    end
+    if filetype == 5 % image data (raw)
+        writefigsyn = 0; % don't write individual figures
     end
     
     % Pre-loop to figure out dimensions of master array
@@ -168,8 +170,12 @@ if loadprevious == 0 % run new analysis
     for ii = folders % pre-loop to figure out dimensions of master array
         if filetype == 1  % look for .txt files in subfolders
             T = dir(fullfile(D,N{ii},'*.txt'));
-        else % look for CH2 tifs
-            T = dir(fullfile(D,N{ii},'*CH2*.tif'));
+        else
+            if filetype < 4 % look for CH2 tifs
+                T = dir(fullfile(D,N{ii},'*CH2*.tif'));
+            else % look for CH2 raws
+                T = dir(fullfile(D,N{ii},'*CH2*.raw'));
+            end
         end
         C = {T(~[T.isdir]).name}; % all data files
         if numel(C) > maxfilesinfolder
@@ -178,17 +184,17 @@ if loadprevious == 0 % run new analysis
         if isempty(T) == 0 % skips subfolders without data files
             for jj = 1:numel(C) % jj = file number in subfolder ii
                 F = fullfile(D,N{ii},C{jj}); % current file
-                if filetype == 1 % load data from .txt
+                if filetype == 1 % load Tlist from .txt
                     data = importdata(F); % load data
                     x = data(:,1); % save delay position as x
-                else % load data from Tlist.txt and .tif
+                else % load Tlist from Tlist.txt
                     Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
                     x = importdata(Tlistname); % load Tlist as x
                 end
                 if x(1) == x(end) && trimlastT == 0 % if x isn't single-valued
                     trimlastT = 1; % trimming is needed
                 end
-                x = x(trimfirstT+1:end-trimlastT); % cleaned up point trimming
+                x = x(trimfirstT+1:end-trimlastT); % point trimming
                 currentTlength = length(x);
                 % Check if raw data work for convolution fitting
                 deltax = zeros(length(x)-1,1);
@@ -208,7 +214,7 @@ if loadprevious == 0 % run new analysis
         end
     end
     
-    if 10*maxTlength-1 < indrDCbleach % make sure master array is more than large enough
+    if 10*maxTlength-1 < indrDCbleach % make sure master array is large enough
         maxTlength = indrDCbleach;
     else
         maxTlength = 10*maxTlength-1; % interpolate for tD compensation
@@ -241,10 +247,14 @@ if loadprevious == 0 % run new analysis
             T = dir(fullfile(D,N{ii},'*.txt'));
             infofilesraw = [];
             infofiles = [];
-        else % look for CH2 tifs
-            T = dir(fullfile(D,N{ii},'*CH2*.tif'));
+        else % look for CH2 images
             infofilesraw = dir(fullfile(D,N{ii},'*IRsweep*.txt'));
             infofiles = {infofilesraw(~[infofilesraw.isdir]).name}; % info files
+            if filetype < 4 % tifs
+                T = dir(fullfile(D,N{ii},'*CH2*.tif')); 
+            else % raws
+                T = dir(fullfile(D,N{ii},'*CH2*.raw'));
+            end
         end
         C = {T(~[T.isdir]).name}; % all data files
         if numel(C) == numel(infofiles)
@@ -314,8 +324,7 @@ if loadprevious == 0 % run new analysis
                     else % MHz
                         PMTBW = 1e6*sscanf(PMTBWstr,'%f');
                     end
-                end
-                if filenameconv == 2 % parse default .tifs
+                else % image file
                     fileinfo = split(folderinfo(end),"_"); % split at "_"s
                     channel = char(fileinfo(end)); % 'CH2'
                     IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
@@ -327,7 +336,10 @@ if loadprevious == 0 % run new analysis
                     idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
                     idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
                     idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
-                    %imgdim = char(fileinfo(end-4)); % '5X5'
+                    imgdim = char(fileinfo(end-4)); % '5X5'
+                    imgdimsplit = split(string(imgdim),"X");
+                    xsteps = imgdimsplit(1);
+                    ysteps = imgdimsplit(end);
                     prbWL = 1; % <-- unknown from filename
                     idlerWL = 1E7/idlerWN;
                     signalWL = 1/((1/1031.2)-(1/idlerWL));
@@ -340,6 +352,34 @@ if loadprevious == 0 % run new analysis
                         IRWN = idlerWN;
                     end
                 end
+                % if filenameconv == 2 % parse default images
+                %     fileinfo = split(folderinfo(end),"_"); % split at "_"s
+                %     channel = char(fileinfo(end)); % 'CH2'
+                %     IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
+                %     IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
+                %     IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
+                %     DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
+                %     DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
+                %     DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
+                %     idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
+                %     idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
+                %     idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
+                %     imgdim = char(fileinfo(end-4)); % '5X5'
+                %     imgdimsplit = split(string(imgdim),"X");
+                %     xsteps = imgdimsplit(1);
+                %     ysteps = imgdimsplit(end);
+                %     prbWL = 1; % <-- unknown from filename
+                %     idlerWL = 1E7/idlerWN;
+                %     signalWL = 1/((1/1031.2)-(1/idlerWL));
+                %     if IRpowermeter ~= 0
+                %         IRpower = IRpowermeter*300; % assuming 300 mW scale
+                %     end
+                %     if idlerWL < 2600 % nm
+                %         IRWN = DFGWN;
+                %     else
+                %         IRWN = idlerWN;
+                %     end
+                % end
                 if infofound == 1 % parse info from IRsweep.txt files
                     infofilename = fullfile(D,N{ii},infofiles{jj});
                     infooptions = detectImportOptions(infofilename);
@@ -380,12 +420,7 @@ if loadprevious == 0 % run new analysis
                     end
                     dwelltime = infofile(19);
                 end
-                if filenameconv == 3 % parse probe sweep .tifs
-                    subfolderinfo = split(N{ii}," "); % split subfolder at " "s
-                    fileinfo = split(folderinfo(end),"_"); % split filename at "_"s
-                    IRWNstrfull = char(fileinfo(1)); % extract IRWN - "1598cm-1"
-                    IRWNstr = IRWNstrfull(1:end-4); % remove "cm-1" suffix - "1598"
-                    IRWN = sscanf(IRWNstr,'%f'); % convert to double - 1598
+                if filenameconv == 3 % probe sweep
                     prbstrfull = char(fileinfo(2)); % probe WL - "780 (10)"
                     if length(prbstrfull) >= 6 % "780 (10)" --> 790 nm
                         prbsplit = split(prbstrfull," "); % "780" "(10)"
@@ -411,28 +446,55 @@ if loadprevious == 0 % run new analysis
                         prbstr = prbstrfull(1:3); % '780'
                         prbWL = sscanf(prbstr,'%f'); % 780
                     end
-                    IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
-                    IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
-                    IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
-                    DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
-                    DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
-                    DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
-                    idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
-                    idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
-                    idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
-                    %imgdim = char(fileinfo(end-4)); % '5X5'
-                    idlerWL = 1E7/idlerWN;
-                    signalWL = 1/((1/1031.2)-(1/idlerWL));
-                    if IRpowermeter ~= 0
-                        IRpower = IRpowermeter*300; % assuming 300 mW scale
-                    end
                 end
-                if filenameconv == 4 % parse IR sweep .tifs (unnecessary if IR checked)
-                    subfolderinfo = split(N{ii}," "); % split subfolder at " "s
-                    fileinfo = split(folderinfo(end),"_"); % split filename at "_"s
-                    prbWLstrfull = char(fileinfo(1)); % extract probe WL - "780nm"
-                    prbWLstr = prbWLstrfull(1:end-2); % remove "nm" suffix - "780"
-                    prbWL = sscanf(prbWLstr,'%f'); % convert to double - 780
+                % if filenameconv == 3 % parse probe sweep .tifs
+                %     subfolderinfo = split(N{ii}," "); % split subfolder at " "s
+                %     fileinfo = split(folderinfo(end),"_"); % split filename at "_"s
+                %     IRWNstrfull = char(fileinfo(1)); % extract IRWN - "1598cm-1"
+                %     IRWNstr = IRWNstrfull(1:end-4); % remove "cm-1" suffix - "1598"
+                %     IRWN = sscanf(IRWNstr,'%f'); % convert to double - 1598
+                %     prbstrfull = char(fileinfo(2)); % probe WL - "780 (10)"
+                %     if length(prbstrfull) >= 6 % "780 (10)" --> 790 nm
+                %         prbsplit = split(prbstrfull," "); % "780" "(10)"
+                %         if length(prbsplit) > 1
+                %             prbWL1char = char(prbsplit(1)); % '780'
+                %             prbWL1 = sscanf(prbWL1char,'%f'); % 780
+                %             prbWL2char = char(prbsplit(2)); % '(10)' or 'finalcheck'
+                %             if length(prbWL2char) >= 7 % 'finalcheck'
+                %                 prbWL2 = 0;
+                %             else % '(10)'
+                %                 prbWL2str = prbWL2char(2:end-1); % '10'
+                %                 prbWL2 = sscanf(prbWL2str,'%f'); % 10
+                %             end
+                %             if totalfilesC <= 130
+                %                 prbWL2 = 2*prbWL2; % step size 2 nm
+                %             end
+                %             prbWL = prbWL1 + prbWL2; % 790
+                %         else % "780finalcheck"
+                %             prbstr = prbstrfull(1:3); % '780'
+                %             prbWL = sscanf(prbstr,'%f'); % 780
+                %         end
+                %     else % "780" or "780nm"
+                %         prbstr = prbstrfull(1:3); % '780'
+                %         prbWL = sscanf(prbstr,'%f'); % 780
+                %     end
+                %     IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
+                %     IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
+                %     IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
+                %     DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
+                %     DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
+                %     DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
+                %     idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
+                %     idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
+                %     idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
+                %     %imgdim = char(fileinfo(end-4)); % '5X5'
+                %     idlerWL = 1E7/idlerWN;
+                %     signalWL = 1/((1/1031.2)-(1/idlerWL));
+                %     if IRpowermeter ~= 0
+                %         IRpower = IRpowermeter*300; % assuming 300 mW scale
+                %     end
+                % end
+                if filenameconv == 4 % IR sweep 
                     IRWNstrfull = char(fileinfo(2)); % IRWN - "1000cm-1 (10)"
                     IRWNsplit = split(IRWNstrfull," "); % "1000cm-1" "(10)"
                     IRWN1char = char(IRWNsplit(1)); % '1000cm-1'
@@ -442,22 +504,38 @@ if loadprevious == 0 % run new analysis
                     IRWN2chartrim = IRWN2char(2:end-1); % "10"
                     IRWN2 = sscanf(IRWN2chartrim,'%f'); % 10
                     IRWN = IRWN1+10*IRWN2; % 1100
-                    IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
-                    IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
-                    IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
-                    DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
-                    DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
-                    DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
-                    idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
-                    idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
-                    idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
-                    %imgdim = char(fileinfo(end-4)); % '5X5'
-                    idlerWL = 1E7/idlerWN;
-                    signalWL = 1/((1/1031.2)-(1/idlerWL));
-                    if IRpowermeter ~= 0
-                        IRpower = IRpowermeter*300; % assuming 300 mW scale
-                    end
                 end
+                % if filenameconv == 4 % parse IR sweep .tifs (unnecessary if IR checked)
+                %     subfolderinfo = split(N{ii}," "); % split subfolder at " "s
+                %     fileinfo = split(folderinfo(end),"_"); % split filename at "_"s
+                %     prbWLstrfull = char(fileinfo(1)); % extract probe WL - "780nm"
+                %     prbWLstr = prbWLstrfull(1:end-2); % remove "nm" suffix - "780"
+                %     prbWL = sscanf(prbWLstr,'%f'); % convert to double - 780
+                %     IRWNstrfull = char(fileinfo(2)); % IRWN - "1000cm-1 (10)"
+                %     IRWNsplit = split(IRWNstrfull," "); % "1000cm-1" "(10)"
+                %     IRWN1char = char(IRWNsplit(1)); % '1000cm-1'
+                %     IRWN1chartrim = IRWN1char(1:end-4); % "1000"
+                %     IRWN1 = sscanf(IRWN1chartrim,'%f'); % 1000
+                %     IRWN2char = char(IRWNsplit(2)); % "(10)"
+                %     IRWN2chartrim = IRWN2char(2:end-1); % "10"
+                %     IRWN2 = sscanf(IRWN2chartrim,'%f'); % 10
+                %     IRWN = IRWN1+10*IRWN2; % 1100
+                %     IRpowermeterstrfull = char(fileinfo(end-1)); % 'P0.4409'
+                %     IRpowermeterstr = IRpowermeterstrfull(2:end); % '0.4409'
+                %     IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 0.4409
+                %     DFGWNstrfull = char(fileinfo(end-2)); % 'DFG3797.9'
+                %     DFGWNstr = DFGWNstrfull(4:end); % '3797.9'
+                %     DFGWN = sscanf(DFGWNstr,'%f'); % 3797.9
+                %     idlerWNstrfull = char(fileinfo(end-3)); % 'Idler2949.8'
+                %     idlerWNstr = idlerWNstrfull(6:end); % '2949.8'
+                %     idlerWN = sscanf(idlerWNstr,'%f'); % 2949.8
+                %     %imgdim = char(fileinfo(end-4)); % '5X5'
+                %     idlerWL = 1E7/idlerWN;
+                %     signalWL = 1/((1/1031.2)-(1/idlerWL));
+                %     if IRpowermeter ~= 0
+                %         IRpower = IRpowermeter*300; % assuming 300 mW scale
+                %     end
+                % end
 
                 if isempty(IRpower) == 1 % if no IR power found
                     IRpower = IRpowerset; % set to power from config
@@ -493,20 +571,81 @@ if loadprevious == 0 % run new analysis
                         DCsds = zeros(height(signal),width(signal));
                     end
                     imagesize = [1 1];
-                else % load Tlist and .tif
+                else % load Tlist and image
                     Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
                     x = importdata(Tlistname); % load Tlist
-                    data = double(tiffreadVolume(F));
+                    if filetype < 4 % .tif
+                        data = double(tiffreadVolume(F));
+                    else % .raw
+                        imgid = fopen(F);
+                        imgvector = fread(imgid,'real*8'); % load raw file as a vector
+                        matrixarea = length(imgvector)/length(x);
+                        if matrixarea == xsteps*ysteps
+                            %'yes';
+                        else
+                            if mod(sqrt(matrixarea),1) == 0
+                                xsteps = sqrt(matrixarea); ysteps = sqrt(matrixarea);
+                            else
+                                if filetype == 3 || filetype == 5
+                                    warning('Mismatch between dimensions of .raw file and filename.')
+                                end
+                            end
+                        end
+                        data = NaN(xsteps,ysteps,length(x));
+                        for i=1:length(x) % convert raw vector to array
+                            startpoint = xsteps*ysteps*i-(xsteps*ysteps-1); 
+                            endpoint = xsteps*ysteps*i;
+                            imgvectpiece = imgvector(startpoint:endpoint);
+                            for j=1:ysteps
+                                tempstart = xsteps*j-(xsteps-1);
+                                tempend = xsteps*j;
+                                data(j,:,i) = imgvectpiece(tempstart:tempend);
+                            end
+                        end
+                    end
                     imagesize = size(data);
                     if pairedDCAC > 0
                         if pairedDCAC == 2 % SPCM + CH2
                             F_DC = F;
-                            F_DC(end-6:end+1) = "SPCM.tif";
-                            DCdata = double(tiffreadVolume(F_DC));
+                            if filetype < 4 % .tif
+                                F_DC(end-6:end+1) = "SPCM.tif";
+                                DCdata = double(tiffreadVolume(F_DC));
+                            else % .raw
+                                F_DC(end-6:end+1) = "SPCM.raw";
+                                DCid = fopen(F_DC);
+                                DCimgvector = fread(DCid,'real*8'); % load raw file as a vector
+                                DCdata = NaN(xsteps,ysteps,length(x));
+                                for i=1:length(x) % convert raw vector to array
+                                    DCstartpoint = xsteps*ysteps*i-(xsteps*ysteps-1); 
+                                    DCendpoint = xsteps*ysteps*i;
+                                    DCimgvectpiece = imgvector(DCstartpoint:DCendpoint);
+                                    for j=1:ysteps
+                                        DCtempstart = xsteps*j-(xsteps-1);
+                                        DCtempend = xsteps*j;
+                                        DCdata(j,:,i) = DCimgvectpiece(DCtempstart:DCtempend);
+                                    end
+                                end
+                            end
                         else % pairedDCAC = 1, PMT CH1 + CH2
                             F_DC = F;
                             F_DC(end-4) = "1";
-                            DCdata = double(tiffreadVolume(F_DC));
+                            if filetype < 4 % .tif
+                                DCdata = double(tiffreadVolume(F_DC));
+                            else % .raw
+                                DCid = fopen(F_DC);
+                                DCimgvector = fread(DCid,'real*8'); % load raw file as a vector
+                                DCdata = NaN(xsteps,ysteps,length(x));
+                                for i=1:length(x) % convert raw vector to array
+                                    DCstartpoint = xsteps*ysteps*i-(xsteps*ysteps-1); 
+                                    DCendpoint = xsteps*ysteps*i;
+                                    DCimgvectpiece = DCimgvector(DCstartpoint:DCendpoint);
+                                    for j=1:ysteps
+                                        DCtempstart = xsteps*j-(xsteps-1);
+                                        DCtempend = xsteps*j;
+                                        DCdata(j,:,i) = DCimgvectpiece(DCtempstart:DCtempend);
+                                    end
+                                end
+                            end
                         end
                     else % no paired DCAC
                         DCdata = zeros(height(data),width(data),length(x));
@@ -525,7 +664,7 @@ if loadprevious == 0 % run new analysis
                             data = data(:,:,1:length(x));
                         end             
                     end
-                    if filetype == 2 % average & stdev of XY data in .tif
+                    if filetype == 2 || filetype == 4 % avg & stdev of XY data (|| = OR)
                         signal = squeeze(mean(data, [1 2]));
                         sigsds = squeeze(std(data, 0, [1 2]));
                         DC = squeeze(mean(DCdata, [1 2]));
@@ -547,14 +686,14 @@ if loadprevious == 0 % run new analysis
                     startiii = 1; startjjj = 1;
                 end
 
-                if filetype ~= 3 % solution data
+                if filetype == 1 || filetype == 2 || filetype == 4 % solution data
                     imagesize(1) = 1; imagesize(2) = 1;
                     startiii = 1; startjjj = 1;
                 end
     
                 for iii=startiii:imagesize(1)
                     for jjj=startjjj:imagesize(2)
-                        if filetype == 3 % load pixel data
+                        if filetype == 3 || filetype == 5 % load pixel data
                             signal = squeeze(data(iii,jjj,:));
                             sigsds = zeros(height(signal),width(signal));
                             if pairedDCAC > 0
@@ -942,6 +1081,7 @@ if loadprevious == 0 % run new analysis
                         lt2 = string(round(10*lifetime2)/10);
                         sr2 = string(sprintf('%0.3g',r2)); % round to 3 sig figs
                         slt1lt2 = string(sprintf('%0.3g',lt1lt2));
+                        pulsewidth = string(sprintf('%0.3g',FWHM));
                         
                         if annotatefigure > 0 % make figure annotation
                             annot = {'IR = '+string(IRWN)+' cm-1','probe = '+...
@@ -958,15 +1098,17 @@ if loadprevious == 0 % run new analysis
                             end
                             if ltfittype == 1
                                 annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
-                                    ' ps, r^2 = '+sr2};
+                                    ' ps, τ_{p} = '+pulsewidth+' ps, r^2 = '+sr2};
                             end
                             if ltfittype == 2
                                 annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
-                                    lt2+' ps, A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
+                                    lt2+' ps, τ_{p} = '+pulsewidth+...
+                                    ' ps, A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
                             end
                             if ltfittype == 3
                                 annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
-                                    ' ps, β = '+string(fitval(12))+', r^2 = '+sr2};
+                                    ' ps, τ_{p} = '+pulsewidth+' ps, β = '+...
+                                    string(fitval(12))+', r^2 = '+sr2};
                             end
                             if ltfittype > 0 && r2 < 0.7
                                 annot(end) = {'Poor fit, r^2 = ' + sr2};
@@ -1003,28 +1145,27 @@ if loadprevious == 0 % run new analysis
                             % Plot DC and AC side-by-side
                             fig = figure('visible',visibility); 
                             if ltfittype > 0
-                                tiledlayout(2,3);
+                                tiledlayout(2,4); nexttile([1 2]); 
                             else
-                                tiledlayout(1,2);
+                                tiledlayout(1,2); nexttile([1 1]);
                             end
-                            nexttile([1 1]); 
-                            hold on; errorbar(t,DC,DCsds,'o');
-                            plot(tbase,DCbase,'o',t,DCbasecurve,'-'); hold off;
+                            hold on; errorbar(t,DC,DCsds,'o','LineWidth',2);
+                            plot(tbase,DCbase,'o',t,DCbasecurve,'-','LineWidth',2); hold off;
                             xlabel('Time (ps)'); ylabel(ylabelDC);
                             legend('Data','Baseline data','Baseline');
                             nexttile([1 1]); 
                             if ltfittype > 0
-                                plot(tint,resid); xlabel('Time (ps)'); 
+                                plot(tint,resid,'LineWidth',2); xlabel('Time (ps)'); 
                                 ylabel('Residuals (AU)'); legend('Residuals');
                                 nexttile([1 1]);
-                                plot(wn,powerfft); xlabel('Frequency (cm^{-1})'); xlim([0 Inf]);
+                                plot(wn,powerfft,'LineWidth',2); xlabel('Frequency (cm^{-1})'); xlim([0 Inf]);
                                 ylabel('|FFT|^{2}'); legend('FFT');
-                                nexttile([1 3]);
+                                nexttile([1 4]);
                             end
-                            hold on; errorbar(t,signal,sigsds,'o');
-                            plot(tbase,sigbase,'go',t,basecurve,'-'); 
+                            hold on; errorbar(t,signal,sigsds,'o','LineWidth',2);
+                            plot(tbase,sigbase,'go',t,basecurve,'-','LineWidth',2); 
                             if ltfittype > 0
-                                plot(tint,fitcurve,'-')
+                                plot(tint,fitcurve,'-','LineWidth',2)
                             end
                             hold off;
                             xlabel('Time (ps)'); ylabel('AC signal (AU)');
@@ -1037,17 +1178,17 @@ if loadprevious == 0 % run new analysis
                             fig = figure('visible',visibility);
                             if ltfittype > 0
                                 tiledlayout(3,2); nexttile([1 1]);
-                                plot(tint,resid); xlabel('Time (ps)'); 
+                                plot(tint,resid,'LineWidth',2); xlabel('Time (ps)'); 
                                 ylabel('Residuals (AU)'); legend('Residuals');
-                                nexttile([1 1]); plot(wn,powerfft); 
+                                nexttile([1 1]); plot(wn,powerfft,'LineWidth',2); 
                                 xlabel('Frequency (cm^{-1})'); xlim([0 Inf]);
                                 ylabel('|FFT|^{2}'); legend('FFT');
                                 nexttile([2 2]);
                             end
-                            hold on; errorbar(t,signal,sigsds,'o')
-                            plot(tbase,sigbase,'go',t,basecurve,'-'); 
+                            hold on; errorbar(t,signal,sigsds,'o','LineWidth',2)
+                            plot(tbase,sigbase,'go',t,basecurve,'-','LineWidth',2); 
                             if ltfittype > 0
-                                plot(tint,fitcurve,'-')
+                                plot(tint,fitcurve,'-','LineWidth',2)
                             end
                             hold off;
                             xlabel('Time (ps)'); ylabel('AC signal (AU)');
@@ -1112,8 +1253,8 @@ if loadprevious == 0 % run new analysis
                             end
                             
                             if writeprocyn == 1 % write files
-                                temp = master(:,:,ii,jj);
-                                writematrix(temp,outname+'_proc.dat',...
+                                tempmaster = master(:,:,ii,jj);
+                                writematrix(tempmaster,outname+'_proc.dat',...
                                     'FileType','text')
                             end
                         end
@@ -1133,7 +1274,7 @@ if loadprevious == 0 % run new analysis
     end
     
     if writeprocyn == 1 && filetype ~= 3 % write batch file
-        writematrix(master,'batch_align_flattenedv4.md','FileType','text') % backup, not very useful
+        writematrix(master,'batch_align_flattenedv5.md','FileType','text') % backup, not very useful
         writematrix(size(master),'master_size.yml','FileType','text')
     end
     if testrun == 0 % close background figures if not a test run
@@ -1151,7 +1292,8 @@ else % reload previously processed data
         if isempty(T) == 0
             for jj = 1:numel(C)
                 F = fullfile(D,N{ii},C{jj});
-                master(:,:,ii,jj) = importdata(F);
+                tempimport = importdata(F);
+                master(1:height(tempimport),1:width(tempimport),ii,jj) = tempimport;
             end
         end
     end
@@ -1226,6 +1368,157 @@ figvis = 'off';
 %     xlabel('Sum (AU)'); ylabel('ω_{IR} (cm^{-1})');
 % end
 
+% % Calculating average SNR
+% snrmatrix = squeeze(master(indrsnr,indcvalue,:,:));
+% snrvect = [];
+% for i=1:height(snrmatrix)
+%     for j=1:width(snrmatrix)
+%         if ~isnan(snrmatrix(i,j))
+%             snrvect(end+1) = snrmatrix(i,j);
+%         end
+%     end
+% end
+% avgsnr = mean(snrvect,"all");
+% % Average SNR = 450
+
+analyzed = 2:7;
+lifetime = NaN(max(master(indrnfiles,indcvalue,:,:),[],"all"),length(analyzed));
+time = NaN(length(analyzed),max(master(indrtlist,indcvalue,:,:),[],"all"));
+wIR = NaN(max(master(indrnfiles,indcvalue,:,:),[],"all"),length(analyzed));
+csig = NaN(height(wIR),width(time),length(analyzed));
+
+for i=1:length(analyzed)
+    lifetime(:,i) = squeeze(master(indrlifetime1,indcvalue,analyzed(i),:)).';
+    time(i,1:master(indrtlist,indcvalue,analyzed(i),1)) = squeeze(master(1:master(indrtlist,indcvalue,analyzed(i),1),indct,analyzed(i),1)).';
+    csig(1:master(indrnfiles,indcvalue,analyzed(i),1),1:master(indrtlist,indcvalue,analyzed(i),1),i) = squeeze(master(1:master(indrtlist,indcvalue,analyzed(i),1),indccorrsig,analyzed(i),1:master(indrnfiles,indcvalue,analyzed(i),1))).';
+end
+
+td = time(1,:);
+dmsosweep = csig(1,:,2);
+thfsweep = csig(8,:,3);
+etoacsweep = csig(5,:,4);
+chcl3sweep = csig(3,:,5);
+hexsweep = csig(1,:,6);
+
+ndmso = dmsosweep/max(dmsosweep);
+nthf = thfsweep/max(thfsweep);
+netoac = etoacsweep/max(etoacsweep);
+nchcl3 = chcl3sweep/max(chcl3sweep);
+nhex = hexsweep/max(hexsweep);
+
+tdmso = rmmissing(lifetime(:,2));
+tthf = rmmissing(lifetime(:,3));
+tetoac = rmmissing(lifetime(:,4));
+tchcl3 = rmmissing(lifetime(:,5));
+thex = rmmissing(lifetime(:,6));
+
+dmso = mean(tdmso);
+dmsosd = std(tdmso);
+
+thf = mean(tthf);
+thfsd = std(tthf);
+
+etoac = mean(tetoac);
+etoacsd = std(tetoac);
+
+chcl3 = mean(tchcl3);
+chcl3sd = std(tchcl3);
+
+hex = mean(thex);
+hexsd = std(thex);
+
+srf = [-13.856... % DMSO
+    -10.933... % THF
+    -10.185... % EtOAc
+    -9.306... % CHCl3
+    -7.188].';... % Hex70
+
+% My colors (brighter)
+colorset(1,:) = [0.8 0.2 0.2];
+colorset(2,:) = [0.7 0.4 0.1];
+colorset(3,:) = [0.2 0.8 0.2];
+colorset(4,:) = [0.2 0.7 0.7];
+colorset(5,:) = [0.2 0.2 0.8];
+
+fontsize = 20;
+
+nitrilefig1 = figure('visible',figvis);
+hold on;
+plot(td,ndmso,'-o','Color',colorset(1,:),'LineWidth',2);
+plot(td,nthf,'-o','Color',colorset(2,:),'LineWidth',2);
+plot(td,netoac,'-o','Color',colorset(3,:),'LineWidth',2);
+plot(td,nchcl3,'-o','Color',colorset(4,:),'LineWidth',2);
+plot(td,nhex,'-o','Color',colorset(5,:),'LineWidth',2);
+hold off;
+xlim([0 5]);
+legend('DMSO','THF','EtOAc','CHCl_3','7:3 hexane:CHCl_3');
+lg = legend; lg.EdgeColor = [1 1 1];
+xlabel('Time delay (ps)'); ylabel('AC signal (AU)');
+ax = gca; ax.FontSize = fontsize;
+saveas(nitrilefig1,'nitrile_fig1.svg','svg');
+
+t_solv = [dmso thf etoac chcl3 hex].';
+
+srf_fit = fit(srf,t_solv,'poly1');
+srf_coef = coeffvalues(srf_fit);
+srf_line = polyval(srf_coef,-50:0);
+
+srf_lm = fitlm(srf,t_solv);
+corrcoeff = srf_lm.Rsquared.Adjusted;
+corrcoeff = sprintf('%0.3g',corrcoeff);
+
+nitrilefig2 = figure('visible',figvis);
+hold on;
+errorbar(srf(1),dmso,dmsosd,'.','MarkerSize',20,'Color',colorset(1,:),'LineWidth',2);
+errorbar(srf(2),thf,thfsd,'.','MarkerSize',20,'Color',colorset(2,:),'LineWidth',2);
+errorbar(srf(3),etoac,etoacsd,'.','MarkerSize',20,'Color',colorset(3,:),'LineWidth',2);
+errorbar(srf(4),chcl3,chcl3sd,'.','MarkerSize',20,'Color',colorset(4,:),'LineWidth',2);
+errorbar(srf(5),hex,hexsd,'.','MarkerSize',20,'Color',colorset(5,:),'LineWidth',2);
+plot(-50:0,srf_line,'k--','LineWidth',2);
+hold off;
+xlabel('Solvent reaction field (MV/cm)'); ylabel('Lifetime (ps)');
+xlim([-15 -6]);
+ax = gca; ax.FontSize = fontsize;
+% R^2
+annotation('textbox',[0.32 0.65 0.2 0.2],'String',...
+    'R^2 = '+string(corrcoeff),'FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize);
+% DMSO
+annotation('textbox',[0.17 0.43 0.2 0.2],'String',...
+    'DMSO','FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize,'Color',colorset(1,:));
+% THF
+annotation('textbox',[0.437 0.52 0.2 0.2],'String',...
+    'THF','FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize,'Color',colorset(2,:));
+% EtOAc
+annotation('textbox',[0.485 0.42 0.2 0.2],'String',...
+    'EtOAc','FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize,'Color',colorset(3,:));
+% CHCl3
+annotation('textbox',[0.56 0.08 0.2 0.2],'String',...
+    'CHCl_3','FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize,'Color',colorset(4,:));
+% Hex70
+annotation('textbox',[0.665 0.27 0.2 0.2],'String',...
+    '7:3 hexane:CHCl_3','FitBoxToText','on','EdgeColor',[1 1 1],'FontSize',fontsize,'Color',colorset(5,:));
+fontname("Arial")
+saveas(nitrilefig2,'nitrile_fig2.svg','svg');
+
+
+% Theory vs experiment
+theoryfields = -50:10:10;
+theorylt = [10.1725 5.9281 3.8702 2.8305 2.1323 1.7758 1.5918];
+expsds = [dmsosd thfsd etoacsd chcl3sd hexsd];
+
+theoryvexp = figure('visible',figvis);
+hold on; 
+plot(theoryfields,theorylt,'k-o','MarkerSize',10,'LineWidth',3);
+errorbar(srf,t_solv,expsds,'r.','MarkerSize',20,'LineWidth',3)
+hold off;
+ax = gca;
+ax.FontSize = fontsize;
+xlabel('Electric field (MV/cm)'); ylabel('Lifetime (ps)');
+xlim([-30 10]);
+legend('Theory','Experiment');
+lg = legend; lg.EdgeColor = [1 1 1];
+fontname("Arial")
+saveas(theoryvexp,'theoryvexp.svg','svg');
 
 
 
