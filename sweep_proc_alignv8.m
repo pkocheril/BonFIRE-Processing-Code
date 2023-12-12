@@ -11,14 +11,15 @@
 %%% v6 - improved default contour plotting, added targetfolders writeout
 %%% v7 - bug fixes, combined additional info writeout into one file,
 % automated file type recognition
+%%% v8 - auto-sorted contours, auto-Tlist generation
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data'/2023_12_06-07/
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data'/2023_12_08/
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
-runtype = 0; % 0 = process all, 1 = test run with a few files,
+runtype = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
 targetfolders = []; % indices of folders to process, [] = dialog
 t0pos = []; % specify t0 position (mm), [] = autofind
@@ -177,7 +178,7 @@ if loadprevious == 0 % run new analysis
             end
     
             if autotype == 1 % figure out file type
-                checkraw = dir(fullfile(D,N{ii},'*CH2*.raw')); % check for raw files
+                checkraw = dir(fullfile(D,N{ii},'*CH2.raw')); % check for raw files
                 checkraw = {checkraw(~[checkraw.isdir]).name};
     
                 if isempty(datatype) == 1
@@ -196,9 +197,9 @@ if loadprevious == 0 % run new analysis
                         filetype = 4; % solution data
                     end
                     if isempty(pairedDCAC) == 1
-                        CH1raw = dir(fullfile(D,N{ii},'*CH1*.raw')); % check for CH1 files
+                        CH1raw = dir(fullfile(D,N{ii},'*CH1.raw')); % check for CH1 files
                         CH1raw = {CH1raw(~[CH1raw.isdir]).name};
-                        SPCMraw = dir(fullfile(D,N{ii},'*SPCM*.raw')); % check for SPCM files
+                        SPCMraw = dir(fullfile(D,N{ii},'*SPCM.raw')); % check for SPCM files
                         SPCMraw = {SPCMraw(~[SPCMraw.isdir]).name};
                         if numel(CH1raw) == numel(checkraw)
                             pairedDCAC = 1; % paired CH1 and CH2 data
@@ -211,7 +212,7 @@ if loadprevious == 0 % run new analysis
                         end
                     end
                 else % no raw files
-                    checktif = dir(fullfile(D,N{ii},'*CH2*.tif')); % check for tif files
+                    checktif = dir(fullfile(D,N{ii},'*CH2.tif')); % check for tif files
                     checktif = {checktif(~[checktif.isdir]).name};
                     if numel(checktif) > 0 % tif files present
                         if datatype == 1 % image data
@@ -220,9 +221,9 @@ if loadprevious == 0 % run new analysis
                             filetype = 2; % solution data
                         end
                         if isempty(pairedDCAC) == 1
-                            CH1tif = dir(fullfile(D,N{ii},'*CH1*.tif')); % check for CH1 files
+                            CH1tif = dir(fullfile(D,N{ii},'*CH1.tif')); % check for CH1 files
                             CH1tif = {CH1tif(~[CH1tif.isdir]).name};
-                            SPCMtif = dir(fullfile(D,N{ii},'*SPCM*.tif')); % check for SPCM files
+                            SPCMtif = dir(fullfile(D,N{ii},'*SPCM.tif')); % check for SPCM files
                             SPCMtif = {SPCMtif(~[SPCMtif.isdir]).name};
                             if numel(CH1tif) == numel(checktif)
                                 pairedDCAC = 1; % paired CH1 and CH2 data
@@ -256,9 +257,9 @@ if loadprevious == 0 % run new analysis
                     T = dir(fullfile(D,N{ii},'*.txt'));
                 else
                     if filetype < 4 % look for CH2 tifs
-                        T = dir(fullfile(D,N{ii},'*CH2*.tif'));
+                        T = dir(fullfile(D,N{ii},'*CH2.tif'));
                     else % look for CH2 raws
-                        T = dir(fullfile(D,N{ii},'*CH2*.raw'));
+                        T = dir(fullfile(D,N{ii},'*CH2.raw'));
                     end
                 end
                 C = {T(~[T.isdir]).name}; % all data files
@@ -273,7 +274,20 @@ if loadprevious == 0 % run new analysis
                             x = data(:,1); % save delay position as x
                         else % load Tlist from Tlist.txt
                             Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
-                            x = importdata(Tlistname); % load Tlist as x
+                            if isfile(Tlistname) % check if Tlist exists
+                                x = importdata(Tlistname); % load Tlist
+                                trueTlist = 1;
+                            else % dialog to generate a Tlist
+                                trueTlist = 0;
+                                prompt = {'Specify start position (mm).','Specify end position (mm).','Specify step spacing (mm).'};
+                                dlgtitle = 'Tlist Not Found';
+                                dims = [1 45; 1 45; 1 45];
+                                definput = {'176','180.05','0.05'};
+                                Tlistanswer = inputdlg(prompt,dlgtitle,dims,definput);
+                                Tlistanswer = str2double(Tlistanswer);
+                                numberofpoints = 1+(Tlistanswer(2)-Tlistanswer(1))/Tlistanswer(3);
+                                x = linspace(Tlistanswer(1),Tlistanswer(2),numberofpoints);
+                            end
                         end
                         if x(1) == x(end) && trimlastT == 0 % if x isn't single-valued
                             trimlastT = 1; % trimming is needed
@@ -337,9 +351,9 @@ if loadprevious == 0 % run new analysis
                     infofilesraw = dir(fullfile(D,N{ii},'*IRsweep*.txt'));
                     infofiles = {infofilesraw(~[infofilesraw.isdir]).name}; % info files
                     if filetype < 4 % tifs
-                        T = dir(fullfile(D,N{ii},'*CH2*.tif')); 
+                        T = dir(fullfile(D,N{ii},'*CH2.tif')); 
                     else % raws
-                        T = dir(fullfile(D,N{ii},'*CH2*.raw'));
+                        T = dir(fullfile(D,N{ii},'*CH2.raw'));
                     end
                 end
                 C = {T(~[T.isdir]).name}; % all data files
@@ -470,10 +484,13 @@ if loadprevious == 0 % run new analysis
                         end
                         if infofound == 1 % parse info from IRsweep.txt files
                             infofilename = fullfile(D,N{ii},infofiles{jj});
-                            infooptions = detectImportOptions(infofilename);
-                            infooptions = setvaropts(infooptions,'Var1','InputFormat','MM/dd/uuuu');
-                            infofiletable = readtable(infofilename,infooptions);
-                            infofile = table2array(infofiletable(:,3:end)); % cut date/time
+                            infoarray = importdata(infofilename);
+                            infofile = infoarray.data;
+                            % Old version - had an error for the SPCM file
+                            % infooptions = detectImportOptions(infofilename);
+                            % infooptions = setvaropts(infooptions,'Var1','InputFormat','MM/dd/uuuu');
+                            % infofiletable = readtable(infofilename,infooptions);
+                            % infofile = table2array(infofiletable(:,3:end)); % cut date/time
                             xinitial = infofile(1);
                             xfinal = infofile(2);
                             xsteps = infofile(3);
@@ -582,7 +599,20 @@ if loadprevious == 0 % run new analysis
                             imagesize = [1 1];
                         else % load Tlist and image
                             Tlistname = fullfile(D,N{ii},'Tlist.txt'); % current Tlist
-                            x = importdata(Tlistname); % load Tlist
+                            if isfile(Tlistname) % check if Tlist exists
+                                x = importdata(Tlistname); % load Tlist
+                                trueTlist = 1;
+                            else % dialog to generate a Tlist
+                                trueTlist = 0;
+                                prompt = {'Specify start position (mm).','Specify end position (mm).','Specify step spacing (mm).'};
+                                dlgtitle = 'Tlist Not Found';
+                                dims = [1 45; 1 45; 1 45];
+                                definput = {'176','180.05','0.05'};
+                                Tlistanswer = inputdlg(prompt,dlgtitle,dims,definput);
+                                Tlistanswer = str2double(Tlistanswer);
+                                numberofpoints = 1+(Tlistanswer(2)-Tlistanswer(1))/Tlistanswer(3);
+                                x = linspace(Tlistanswer(1),Tlistanswer(2),numberofpoints);
+                            end
                             if filetype < 4 % .tif
                                 data = double(tiffreadVolume(F));
                             else % .raw
@@ -596,7 +626,11 @@ if loadprevious == 0 % run new analysis
                                         xsteps = sqrt(matrixarea); ysteps = sqrt(matrixarea);
                                     else
                                         if filetype == 3 || filetype == 5
-                                            warning('Mismatch between dimensions of .raw file and filename.')
+                                            if trueTlist == 1
+                                                warning('Mismatch between dimensions of .raw file and filename.')
+                                            else
+                                                warning('Mismatch in dimensions of file - check Tlist specification and file dimensions.')
+                                            end
                                         end
                                     end
                                 end
@@ -951,8 +985,8 @@ if loadprevious == 0 % run new analysis
                                         0,0.01,... % amp 2, τ2min (ps)
                                         1e-2]; % β min
                                     ub = [newubbase,20,9,... % basecoefs, IRF center (ps), IRF max (ps)
-                                        900,100,... % amp 1, τ1max (ps)
-                                        900,100,... % amp 2, τ2max (ps)
+                                        Inf,100,... % amp 1, τ1max (ps)
+                                        Inf,100,... % amp 2, τ2max (ps)
                                         1e2]; % β max
         
                                     % Implement fit type options
@@ -1295,7 +1329,7 @@ if loadprevious == 0 % run new analysis
         end
     end
     if writeprocyn == 1 && filetype ~= 3 % write batch file
-        writematrix(master,'batch_align_flattenedv7.md','FileType','text') % backup, not very useful
+        writematrix(master,'batch_align_flattenedv8.md','FileType','text') % backup, not very useful
         writematrix([size(master) targetfolders],'add_info.yml','FileType','text'); % additional info
     end
     if runtype == 0 % close background figures if not a test run
@@ -1336,11 +1370,11 @@ end
 
 clc; close all;
 clearvars -except targetfolders maste* ind*
-figvis = 'off';
-
-subset = targetfolders; % data to visualize
+figvis = 'on';
 
 % Default contour code
+subset = targetfolders; % data to visualize
+
 % Set up vectors
 time = NaN(length(subset),max(master(indrtlist,indcvalue,:,:),[],"all"));
 timealign = NaN(length(subset),max(master(indralignlength,indcvalue,:,:),[],"all"));
@@ -1362,80 +1396,63 @@ for i=1:length(subset)
     csiga(1:nfiles,1:alength,i) = squeeze(master(1:alength,indcsigalign,subset(i),1:nfiles)).';
 end
 
-% % Plotting
-% for i=1:length(subset)
-%     fineness = 100;
-%     if length(unique(rmmissing(prb(:,i)))) == 1 % no probe tuning --> IR sweep
-%         xstring = 'Time delay (ps)';
-%         ystring = 'ω_{IR}/2πc (cm^{-1})';
-%         w1 = wIR(:,i);
-%         t1 = time(i,:); 
-%         sigmatrix = csig(:,:,i);
-%         % Purple-white-green gradient for contour map
-%         startcolor = [0.5 0 0.5]; % purple
-%         endcolor = [0.2 0.8 0.2]; % green
-%     else % probe sweep
-%         xstring = 'Compensated time delay (ps)';
-%         ystring = 'λ_{probe} (nm)';
-%         w1 = prb(:,i);
-%         t1 = timealign(i,:);
-%         sigmatrix = csiga(:,:,i);
-%         % Red-white-blue gradient for contour map
-%         startcolor = [0 0 1]; % blue
-%         endcolor = [1 0 0]; % red
-%     end
-%     map1 = [linspace(startcolor(1),1,fineness) linspace(1,endcolor(1),fineness)];
-%     map2 = [linspace(startcolor(2),1,fineness) linspace(1,endcolor(2),fineness)];
-%     map3 = [linspace(startcolor(3),1,fineness) linspace(1,endcolor(3),fineness)];
-%     map = [map1.' map2.' map3.'];
-%     [x1,x2] = meshgrid(t1,w1);
-%     figure('visible',figvis);
-%     tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
-%     nexttile([1 3]); % peak vs time
-%     plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2);
-%     %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
-%     xlim([min(t1) max(t1)]); 
-%     xlabel(xstring); ylabel('Peak (AU)');
-%     nexttile([3 3]);
-%     contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
-%     cb.Label.String='Corrected signal (AU)';
-%     cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
-%     xlabel(xstring); ylabel(ystring);
-%     xlim([min(t1) max(t1)]);
-%     ylim([min(w1) max(w1)]);
-%     nexttile([1 1]); xticks([]); yticks([]); % blank square
-%     annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
-%     nexttile([3 1]); % peak vs freq
-%     plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2);
-%     %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
-%     ylim([min(w1) max(w1)]);
-%     xlabel('Peak (AU)'); ylabel(ystring);
-% end
+% Plotting
+for i=1:length(subset)
+    fineness = 100;
+    if length(unique(rmmissing(prb(:,i)))) == 1 % no probe tuning --> IR sweep
+        xstring = 'Time delay (ps)';
+        ystring = 'ω_{IR}/2πc (cm^{-1})';
+        w1 = wIR(:,i);
+        t1 = time(i,:); 
+        sigmatrix = csig(:,:,i);
+        % Purple-white-green gradient for contour map
+        startcolor = [0.5 0 0.5]; % purple
+        endcolor = [0.2 0.8 0.2]; % green
+    else % probe sweep
+        xstring = 'Compensated time delay (ps)';
+        ystring = 'λ_{probe} (nm)';
+        w1 = prb(:,i);
+        t1 = timealign(i,:);
+        sigmatrix = csiga(:,:,i);
+        % Red-white-blue gradient for contour map
+        startcolor = [0 0 1]; % blue
+        endcolor = [1 0 0]; % red
+    end
+    % Auto-sorting
+    [t1,tind] = sort(t1);
+    [w1,wind] = sort(w1);
+    sigmatrix = sigmatrix(wind,tind);
 
-tD = time(1,:);
-sigmatrix = squeeze(csig);
+    % Color mapping
+    map1 = [linspace(startcolor(1),1,fineness) linspace(1,endcolor(1),fineness)];
+    map2 = [linspace(startcolor(2),1,fineness) linspace(1,endcolor(2),fineness)];
+    map3 = [linspace(startcolor(3),1,fineness) linspace(1,endcolor(3),fineness)];
+    map = [map1.' map2.' map3.'];
 
-figure;
-hold on;
-for i=1:4
-    plot(tD,sigmatrix(:,i));
+    [x1,x2] = meshgrid(t1,w1);
+    figure('visible',figvis);
+    tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
+    nexttile([1 3]); % peak vs time
+    plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2);
+    %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
+    xlim([min(t1) max(t1)]); 
+    xlabel(xstring); ylabel('Peak (AU)');
+    nexttile([3 3]);
+    contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
+    cb.Label.String='Corrected signal (AU)';
+    cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
+    xlabel(xstring); ylabel(ystring);
+    xlim([min(t1) max(t1)]);
+    ylim([min(w1) max(w1)]);
+    nexttile([1 1]); xticks([]); yticks([]); % blank square
+    annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
+    nexttile([3 1]); % peak vs freq
+    plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2);
+    %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
+    ylim([min(w1) max(w1)]);
+    xlabel('Peak (AU)'); ylabel(ystring);
 end
-legend('12/6/23','12/7/23 10 mM','12/7/23 100 uM','12/7/23 100 uM silver');
 
-figure;
-hold on;
-for i=[1 3 4]
-    plot(tD,sigmatrix(:,i));
-end
-legend('12/6/23','12/7/23 100 uM','12/7/23 100 uM silver');
-
-figure;
-hold on;
-for i=[1 3]
-    plot(tD(2:end),sigmatrix(2:end,i),'LineWidth',2);
-end
-legend('12/6/23','12/7/23');
-xlabel('Time delay (ps)'); ylabel('AC signal (AU)');
 
 
 %% Functions
