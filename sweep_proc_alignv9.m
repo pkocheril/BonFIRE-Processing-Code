@@ -12,9 +12,10 @@
 %%% v7 - bug fixes, combined additional info writeout into one file,
 % automated file type recognition
 %%% v8 - auto-sorted contours, auto-Tlist generation
+%%% v9 - bug fixes
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data'/2023_12_08/
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2023_12_08/'
 clear; clc; close all;
 
 % Main configuration options
@@ -247,12 +248,14 @@ if loadprevious == 0 % run new analysis
                 end
             end
 
+            if datatype == 1 % for image data
+                writefigsyn = 0; % don't write individual figures
+            end
+
             if passes == 1 % 1st pass: pre-loop to figure out dimensions of master array
                 maxTlength = 0; maxfilesinfolder = 0; % counter variables
             
-                if datatype == 1 % for image data
-                    writefigsyn = 0; % don't write individual figures
-                end
+                
                 if filetype == 1  % look for .txt files in subfolders
                     T = dir(fullfile(D,N{ii},'*.txt'));
                 else
@@ -277,16 +280,9 @@ if loadprevious == 0 % run new analysis
                             if isfile(Tlistname) % check if Tlist exists
                                 x = importdata(Tlistname); % load Tlist
                                 trueTlist = 1;
-                            else % dialog to generate a Tlist
+                            else % guess a Tlist
                                 trueTlist = 0;
-                                prompt = {'Specify start position (mm).','Specify end position (mm).','Specify step spacing (mm).'};
-                                dlgtitle = 'Tlist Not Found';
-                                dims = [1 45; 1 45; 1 45];
-                                definput = {'176','180.05','0.05'};
-                                Tlistanswer = inputdlg(prompt,dlgtitle,dims,definput);
-                                Tlistanswer = str2double(Tlistanswer);
-                                numberofpoints = 1+(Tlistanswer(2)-Tlistanswer(1))/Tlistanswer(3);
-                                x = linspace(Tlistanswer(1),Tlistanswer(2),numberofpoints);
+                                x = linspace(176,180.05,82);
                             end
                         end
                         if x(1) == x(end) && trimlastT == 0 % if x isn't single-valued
@@ -384,7 +380,13 @@ if loadprevious == 0 % run new analysis
                         end
         
                         % Filename parsing
-                        folderinfo = split(F,"/"); % split path into folders
+                        macseparator = count(F,'/');
+                        winseparator = count(F,'\');
+                        if macseparator > winseparator % split path into folders
+                            folderinfo = split(F,"/");
+                        else
+                            folderinfo = split(F,"\");
+                        end
                         
                         if autoconv == 1 % guess file naming convention
                             if filetype == 1 % .txt
@@ -395,16 +397,11 @@ if loadprevious == 0 % run new analysis
                                     filenameconv = 0;
                                 end
                             else % .tif or .raw
-                                lookforsweep = count(folderinfo(end-1),'sweep');
-                                if lookforsweep > 0 % found sweep in folder name
-                                    lookforDFG = count(folderinfo(end-1),'DFG');
-                                    if lookforDFG == 0 % no 'DFG' in name --> probe sweep
-                                        filenameconv = 3;
-                                    else
-                                        filenameconv = 2; % DFG sweep
-                                    end
-                                else % not a sweep
-                                    filenameconv = 2;
+                                filename = char(folderinfo(end));
+                                if strcmp(filename(5:9),'cm-1_') % filename ####cm-1_...
+                                    filenameconv = 3; % probe sweep
+                                else
+                                    filenameconv = 2; % not a probe sweep
                                 end
                             end
                         end
@@ -486,11 +483,6 @@ if loadprevious == 0 % run new analysis
                             infofilename = fullfile(D,N{ii},infofiles{jj});
                             infoarray = importdata(infofilename);
                             infofile = infoarray.data;
-                            % Old version - had an error for the SPCM file
-                            % infooptions = detectImportOptions(infofilename);
-                            % infooptions = setvaropts(infooptions,'Var1','InputFormat','MM/dd/uuuu');
-                            % infofiletable = readtable(infofilename,infooptions);
-                            % infofile = table2array(infofiletable(:,3:end)); % cut date/time
                             xinitial = infofile(1);
                             xfinal = infofile(2);
                             xsteps = infofile(3);
@@ -1138,11 +1130,6 @@ if loadprevious == 0 % run new analysis
                                     else
                                         annotdim = [0.35 0.6 0.2 0.2];
                                     end
-                                    % if pairedDCAC > 0
-                                    %     sDCbleachrate = string(sprintf('%0.2g',DCbleachrate)); % round to 2 sig figs
-                                    %     annot(length(annot)+1) = {'bleach = '+...
-                                    %         sDCbleachrate+' ps^{-1}'};
-                                    % end
                                     if ltfittype == 1
                                         annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
                                             ' ps, τ_{p} = '+pulsewidth+' ps, r^2 = '+sr2};
