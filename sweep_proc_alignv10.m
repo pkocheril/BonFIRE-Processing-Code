@@ -13,22 +13,28 @@
 % automated file type recognition
 %%% v8 - auto-sorted contours, auto-Tlist generation
 %%% v9 - bug fixes
+%%% v10 - updated fitting constraints, added lifetimes to default analysis,
+% updated picoEmerald tuning compensation, added DFG tuning compensation,
+% added per-folder pulse width specification, added loading from batch.dat,
+% added support for Windows file system, made smoother fit curves, 
+% improved info file support, added auto-baseline fit type selection
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2023_12_08/'
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_02-05/'
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
-runtype = 2; % 0 = process all, 1 = test run with a few files,
+runtype = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
 targetfolders = []; % indices of folders to process, [] = dialog
-t0pos = []; % specify t0 position (mm), [] = autofind
-basefittype = 3; % 0 = no baseline fit, 1 = linear, 2 = exp, 3 = exp+line
-ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
-% 2 = Gaussian*biexp, 3 = Gauss*stretchexp
+t0pos = 176.9; % specify t0 position (mm), [] = autofind
 
 % Additional configuration options
+ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
+% 2 = Gaussian*biexp, 3 = Gauss*stretchexp
+basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
+% 2 = exponential, 3 = exponential+linear
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
@@ -44,11 +50,11 @@ trimlastT = 0; % how many points to remove from end of Tlist (default 0)
 trimfirstT = 0; % points to remove from start of Tlist (default 0)
 floatbase = 0.1; % fraction to float baseline coeffs (0.1 -> +/- 10%)
 cutlow = 0.05; % lower baseline fit cutoff, (default 5th %ile)
-cuthigh = 0.95; % upper baseline fit cutoff, (default 95th %ile)
+cuthigh = 0.90; % upper baseline fit cutoff, (default 95th %ile)
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
-ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.01)
+ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
-tuningrate = 0.033; % PicoEmerald signal t0 tuning rate (ps/nm)
+tuningrate = []; % PicoEmerald signal t0 tuning rate (ps/nm), [] = auto
 minprobe = []; maxprobe = []; % probe range for aligning tD, [] = auto-find
 annotatefigure = 1; % 1 = annotate figure (unfinished, leave as 1)
 pairedDCAC = []; % [] = auto-assign, 2 = SPCM + PMT CH2, 
@@ -181,7 +187,6 @@ if loadprevious == 0 % run new analysis
             if autotype == 1 % figure out file type
                 checkraw = dir(fullfile(D,N{ii},'*CH2.raw')); % check for raw files
                 checkraw = {checkraw(~[checkraw.isdir]).name};
-    
                 if isempty(datatype) == 1
                     lookforFOV = strfind(checkraw(1),'FOV'); % check first file in folder
                     if isempty(lookforFOV) == 0 % file name doesn't have 'FOV'
@@ -190,7 +195,6 @@ if loadprevious == 0 % run new analysis
                         datatype = 1; % image data
                     end
                 end
-    
                 if numel(checkraw) > 0 % raw files present
                     if datatype == 1 % image data
                         filetype = 5;
@@ -247,15 +251,11 @@ if loadprevious == 0 % run new analysis
                     end
                 end
             end
-
             if datatype == 1 % for image data
                 writefigsyn = 0; % don't write individual figures
             end
-
             if passes == 1 % 1st pass: pre-loop to figure out dimensions of master array
                 maxTlength = 0; maxfilesinfolder = 0; % counter variables
-            
-                
                 if filetype == 1  % look for .txt files in subfolders
                     T = dir(fullfile(D,N{ii},'*.txt'));
                 else
@@ -345,6 +345,15 @@ if loadprevious == 0 % run new analysis
                     infofiles = [];
                 else % look for CH2 images
                     infofilesraw = dir(fullfile(D,N{ii},'*IRsweep*.txt'));
+                    if isempty(infofilesraw) == 1 % if no IRsweeps
+                        infofilesraw = dir(fullfile(D,N{ii},'*XYZT*.txt')); % look for XYZT info
+                        if isempty(infofilesraw) == 1
+                            infofilesraw = dir(fullfile(D,N{ii},'*Z.txt')); % look for Z stack info
+                            if isempty(infofilesraw) == 1
+                                infofilesraw = dir(fullfile(D,N{ii},'*T.txt')); % look for T stack info
+                            end
+                        end
+                    end
                     infofiles = {infofilesraw(~[infofilesraw.isdir]).name}; % info files
                     if filetype < 4 % tifs
                         T = dir(fullfile(D,N{ii},'*CH2.tif')); 
@@ -382,11 +391,12 @@ if loadprevious == 0 % run new analysis
                         % Filename parsing
                         macseparator = count(F,'/');
                         winseparator = count(F,'\');
-                        if macseparator > winseparator % split path into folders
-                            folderinfo = split(F,"/");
-                        else
-                            folderinfo = split(F,"\");
+                        if macseparator > winseparator % MacOS/UNIX
+                            delimiter = "/";
+                        else % Windows
+                            delimiter = "\";
                         end
+                        folderinfo = split(F,delimiter); % split path into folders
                         
                         if autoconv == 1 % guess file naming convention
                             if filetype == 1 % .txt
@@ -752,7 +762,7 @@ if loadprevious == 0 % run new analysis
                                 else % defined t0 position
                                     t(:) = (x(:)-t0pos)*4/cmmps; % time vector in ps
                                 end
-        
+
                                 nonnormsig = signal;
                                 if powernormyn > 0 % power normalization
                                     if isempty(IRpower) == 1 % if no IR power found
@@ -796,11 +806,29 @@ if loadprevious == 0 % run new analysis
                                 % Setup baseline fitting
                                 ilow = ceil(length(t)*cutlow); % using ceiling to round up
                                 ihigh = ceil(length(t)*cuthigh);
-                                tbase = [t(2:ilow); t(ihigh:end)]; % trimmed t
-                                sigbase = [signal(2:ilow); signal(ihigh:end)]; % trimmed signal
+                                if isempty(basefittype) == 1
+                                    emptybase = 1;
+                                    frontmean = mean(signal(1:ilow));
+                                    tailmean = mean(signal(ihigh:end));
+                                    fronttaildiff = 2*(frontmean-tailmean)/(frontmean+tailmean);
+                                    if fronttaildiff > 0.03
+                                        basefittype = 3;
+                                    else
+                                        basefittype = 1;
+                                    end
+                                else
+                                    emptybase = 0;
+                                end
+                                if basefittype >= 2 % if exponential baseline
+                                    startbase = 1; % start at first point
+                                else % if linear baseline
+                                    startbase = 2; % start at second point
+                                end
+                                tbase = [t(startbase:ilow); t(ihigh:end)]; % trimmed t
+                                sigbase = [signal(startbase:ilow); signal(ihigh:end)]; % trimmed signal
                                 sbr = max(signal(ilow:ihigh))/mean(signal(ihigh:end));
                                 if pairedDCAC > 0
-                                    DCbase = [DC(2:ilow); DC(ihigh:end)]; % trimmed DC
+                                    DCbase = [DC(startbase:ilow); DC(ihigh:end)]; % trimmed DC
                                     DCsbr = max(DC(ilow:ihigh))/mean(DC(ihigh:end));
                                 end
                                 
@@ -816,7 +844,7 @@ if loadprevious == 0 % run new analysis
                                     basefit = zeros(1,5); lbbase = basefit; ubbase = basefit;
                                 else
                                     basefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))+b(5)*tbase-sigbase; % error function
-                                    lbbase = [-Inf -Inf -Inf -Inf -Inf];
+                                    lbbase = [-Inf -Inf 0 -Inf -Inf];
                                     ubbase = [Inf Inf Inf Inf Inf];
                                     if basefittype == 1
                                         lbbase(2:4) = 0; ubbase(2:4) = 0;
@@ -830,8 +858,10 @@ if loadprevious == 0 % run new analysis
                                     baseopt.FunctionTolerance = 1e-12; % make the fit more accurate
                                     baseopt.OptimalityTolerance = 1e-12; % make the fit more accurate
                                     baseopt.StepTolerance = 1e-12; % make the fit more precise
-                                    baseopt.Display = 'off'; % silence console output
-                                    basegs = [min(sigbase) 0.1*(max(sigbase)-min(sigbase)) 0 0 0];
+                                    if troubleshoot == 0
+                                        baseopt.Display = 'off'; % silence console output
+                                    end
+                                    basegs = [min(sigbase) 0.1*(max(sigbase)-min(sigbase)) 0.1 0 0];
                                     basefit = lsqnonlin(basefn,basegs,lbbase,ubbase,baseopt);
                                     basecurve = basefit(1)+basefit(2)*exp(-basefit(3)*(t-basefit(4)))+...
                                         basefit(5)*t;
@@ -842,7 +872,7 @@ if loadprevious == 0 % run new analysis
                                     end
                                     if pairedDCAC > 0 % fit DC baseline
                                         DCbasefn = @(b) b(1)+b(2)*exp(-b(3)*(tbase-b(4)))+b(5)*tbase-DCbase;
-                                        DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0 0 0];
+                                        DCbgs = [min(DCbase) 0.1*(max(DCbase)-min(DCbase)) 0.1 0 0];
                                         DCbasefit = lsqnonlin(DCbasefn,DCbgs,[],[],baseopt);
                                         DCbasecurve = DCbasefit(1)+DCbasefit(2)*exp(-DCbasefit(3)*(t-DCbasefit(4)))+...
                                             DCbasefit(5)*t;
@@ -891,10 +921,10 @@ if loadprevious == 0 % run new analysis
                                 
                                 if isempty(ltfittype) == 1 % auto-choose lifetime fitting
                                     emptytype = 1;
-                                    if IRWN > 2100 && IRWN < 2400
-                                        ltfittype = 1;
+                                    if IRWN > 1680 && IRWN < 2400 % triple bond or carbonyl
+                                        ltfittype = 1; % single exponential
                                     else
-                                        ltfittype = 2;
+                                        ltfittype = 2; % biexponential
                                     end
                                 else
                                     emptytype = 0;
@@ -912,7 +942,7 @@ if loadprevious == 0 % run new analysis
                                         end
                                     end
                         
-                                    if max(tint) < 30 % auto-pad signal if tint doesn't go past 30 ps
+                                    if max(tint) < 100 % auto-pad signal if tint doesn't go past 100 ps
                                         padsignal = 1;
                                     else
                                         padsignal = 0;
@@ -994,7 +1024,16 @@ if loadprevious == 0 % run new analysis
                         
                                     % Parameter constraints from config
                                     if isempty(setpulsewidth) == 0 % pulse width was specified
-                                        lb(7) = setpulsewidth*sqrt(2); ub(7) = setpulsewidth*sqrt(2);
+                                        if length(setpulsewidth) == 1 % single pulse width
+                                            lb(7) = setpulsewidth*sqrt(2); ub(7) = setpulsewidth*sqrt(2);
+                                        else % multiple pulse widths
+                                            if length(setpulsewidth) == numel(N) % if one per folder
+                                                lb(7) = setpulsewidth(ii)*sqrt(2); ub(7) = setpulsewidth(ii)*sqrt(2);
+                                            else
+                                                lb(7) = setpulsewidth(1)*sqrt(2); ub(7) = setpulsewidth(1)*sqrt(2);
+                                                warning('Number of specified pulse widths does not match total number of folders - using first specified only.')
+                                            end
+                                        end
                                     end
                                     if isempty(ltmin) == 0 % minimum lifetime was specified
                                         lb(9) = ltmin; lb(11) = ltmin;
@@ -1010,17 +1049,27 @@ if loadprevious == 0 % run new analysis
                                     options.FunctionTolerance = 1e-12; % make the fit more accurate
                                     options.OptimalityTolerance = 1e-12; % make the fit more accurate
                                     options.StepTolerance = 1e-12; % make the fit more precise
-                                    options.Display = 'off'; % silence console output
+                                    if troubleshoot == 0
+                                        options.Display = 'off'; % silence console output
+                                    end
                                     fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
-                        
-                                    fitcurve = fitval(1)+fitval(2)*exp(-fitval(3)*(tint-fitval(4)))+fitval(5)*tint+ ... % baseline
+
+                                    fitvector = fitval(1)+fitval(2)*exp(-fitval(3)*(tint-fitval(4)))+fitval(5)*tint+ ... % baseline
                                         conv(exp(-((tc-fitval(6))./(fitval(7)/(2*sqrt(log(2))))).^2), ...
                                         IRFamp*heaviside(tc).*(fitval(8)*exp(-(tc)./fitval(9))+fitval(10)*exp(-((tc)./(fitval(11))).^fitval(12))));
+
+                                    tfit = linspace(tint(1),tint(originallength),originallength*10-9).'; % smoother t vector for 
                                     
+                                    fitcurve = spline(tint,fitvector,tfit);
+
+                                    if troubleshoot == 1
+                                        figure; plot(tint,sigint,'o',tint,fitvector,'-'); title('Fitting without crop')
+                                    end
+
                                     % Trim padded signal to original length
                                     tint = tint(1:originallength);
                                     sigint = sigint(1:originallength);
-                                    fitcurve = fitcurve(1:originallength);
+                                    fitvector = fitvector(1:originallength);
                                     
                                     % Calculate pulse width from fit
                                     IRFwidth = fitval(7); % ps
@@ -1046,7 +1095,7 @@ if loadprevious == 0 % run new analysis
                                     end
                         
                                     % Calculate residuals and ssresid
-                                    resid = sigint-fitcurve;
+                                    resid = sigint-fitvector;
                                     ssresid = sum(resid.^2); % sum of squares of residuals
                                     tss = sum((sigint-mean(sigint)).^2); % total sum of squares
                                     r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
@@ -1067,17 +1116,23 @@ if loadprevious == 0 % run new analysis
                                     
                                     if troubleshoot == 1
                                         % Check fit
-                                        figure; tiledlayout(3,1); nexttile([1 1]); plot(tint,resid); nexttile([2 1]); plot(t,signal,'o',tint,fitcurve); title('Fitting')
+                                        figure; tiledlayout(3,1); nexttile([1 1]); plot(tint,resid); nexttile([2 1]); plot(t,signal,'o',tint,fitvector); title('Fitting')
                                         % Check FFT
                                         figure; plot(wn,powerfft); title('FFT');
                                     end
                                 else % no lifetime fitting
-                                    tint = t; sigint = signal; fitcurve = signal;
+                                    tint = t; sigint = signal; fitvector = signal;
                                     lifetime1 = 0; lifetime2 = 0; lt1lt2 = 0;
                                     fitval = zeros(12,1); r2 = 0; FWHM = 0;
                                 end
         
                                 if prbWL < 961 && prbWL > 699 % interpolate for tD compensation
+                                    if isempty(tuningrate)
+                                        % if date before service visit
+                                            %tuningrate = 0.033 % ps/nm
+                                        % else
+                                        tuningrate = 0.026;
+                                    end
                                     alignlength = ceil(((t(end)-t(1))/(tuningrate/2))+1); % want talignspacing >= tuningrate/2
                                     talign = linspace(t(1),t(end),alignlength).';
                                     sigalign = spline(t, corrsig, talign);
@@ -1161,6 +1216,12 @@ if loadprevious == 0 % run new analysis
                                 else
                                     legend1 = {'Data','Baseline data','Baseline'};
                                 end
+                                if powernormyn > 0 % prepare y-axis normalization label
+                                    normlabel = 'Norm. ';
+                                else
+                                    normlabel = 'Raw ';
+                                end
+                                ylabelAC = string(normlabel)+'AC signal (AU)';
                                 if pairedDCAC > 0 % make figure
                                     corrDC = DC - DCbasecurve;
                                     [DCpeak,DCmaxindex] = max(corrDC);
@@ -1171,11 +1232,11 @@ if loadprevious == 0 % run new analysis
                                     DCnoise = range(corrDCbase);
                                     DCsnr = DCpeak/DCnoise;
                                     if pairedDCAC == 2
-                                        ylabelDC = 'SPCM signal (cpms)';
+                                        ylabelDC = string(normlabel)+'SPCM signal (cpms)';
                                     else
-                                        ylabelDC = 'DC signal (AU)';
+                                        ylabelDC = string(normlabel)+'DC signal (AU)';
                                     end
-                        
+                                    
                                     % Plot DC and AC side-by-side
                                     fig = figure('visible',visibility); 
                                     if ltfittype > 0
@@ -1185,24 +1246,24 @@ if loadprevious == 0 % run new analysis
                                     end
                                     hold on; errorbar(t,DC,DCsds,'o','LineWidth',2);
                                     plot(tbase,DCbase,'o',t,DCbasecurve,'-','LineWidth',2); hold off;
-                                    xlabel('Time (ps)'); ylabel(ylabelDC);
+                                    xlabel('Time (ps)'); ylabel(ylabelDC); xlim([min(t) max(t)]);
                                     legend('Data','Baseline data','Baseline');
                                     nexttile([1 1]); 
                                     if ltfittype > 0
                                         plot(tint,resid,'LineWidth',2); xlabel('Time (ps)'); 
-                                        ylabel('Residuals (AU)'); legend('Residuals');
+                                        ylabel('Residuals (AU)'); legend('Residuals'); xlim([min(t) max(t)]);
                                         nexttile([1 1]);
                                         plot(wn,powerfft,'LineWidth',2); xlabel('Frequency (cm^{-1})'); xlim([0 Inf]);
-                                        ylabel('|FFT|^{2}'); legend('FFT');
+                                        ylabel('|FFT(res)|^{2}'); legend('Residual FFT');
                                         nexttile([1 4]);
                                     end
                                     hold on; errorbar(t,signal,sigsds,'o','LineWidth',2);
                                     plot(tbase,sigbase,'go',t,basecurve,'-','LineWidth',2); 
                                     if ltfittype > 0
-                                        plot(tint,fitcurve,'-','LineWidth',2)
+                                        plot(tfit,fitcurve,'-','LineWidth',2);
                                     end
-                                    hold off;
-                                    xlabel('Time (ps)'); ylabel('AC signal (AU)');
+                                    hold off; xlim([min(t) max(t)]);
+                                    xlabel('Time (ps)'); ylabel(ylabelAC);
                                     legend(legend1);
                                     annotation('textbox',annotdim,'String',annot);
                                     if writefigsyn == 1
@@ -1213,19 +1274,19 @@ if loadprevious == 0 % run new analysis
                                     if ltfittype > 0
                                         tiledlayout(3,2); nexttile([1 1]);
                                         plot(tint,resid,'LineWidth',2); xlabel('Time (ps)'); 
-                                        ylabel('Residuals (AU)'); legend('Residuals');
+                                        ylabel('Residuals (AU)'); legend('Residuals'); xlim([min(t) max(t)]);
                                         nexttile([1 1]); plot(wn,powerfft,'LineWidth',2); 
                                         xlabel('Frequency (cm^{-1})'); xlim([0 Inf]);
                                         ylabel('|FFT|^{2}'); legend('FFT');
                                         nexttile([2 2]);
                                     end
-                                    hold on; errorbar(t,signal,sigsds,'o','LineWidth',2)
+                                    hold on; errorbar(t,signal,sigsds,'o','LineWidth',2);
                                     plot(tbase,sigbase,'go',t,basecurve,'-','LineWidth',2); 
                                     if ltfittype > 0
-                                        plot(tint,fitcurve,'-','LineWidth',2)
+                                        plot(tfit,fitcurve,'-','LineWidth',2);
                                     end
-                                    hold off;
-                                    xlabel('Time (ps)'); ylabel('AC signal (AU)');
+                                    hold off; xlim([min(t) max(t)]);
+                                    xlabel('Time (ps)'); ylabel(ylabelAC);
                                     legend(legend1);
                                     annotation('textbox',annotdim,'String',annot);
                                     if writefigsyn == 1
@@ -1262,7 +1323,7 @@ if loadprevious == 0 % run new analysis
                                     master(1:length(snrsweep),indcsnrsweep,ii,jj) = snrsweep(:);
                                     master(1:length(tint),indctint,ii,jj) = tint(:);
                                     master(1:length(sigint),indcsigint,ii,jj) = sigint(:);
-                                    master(1:length(fitcurve),indcfitcurve,ii,jj) = fitcurve(:);
+                                    master(1:length(fitvector),indcfitcurve,ii,jj) = fitvector(:);
                                     master(1:length(fitval),indcfitval,ii,jj) = fitval(:);
                                     master(1:length(corrsig),indcncsig,ii,jj) = corrsig(:)/sigpeak;
                                     master(1:length(talign),indctalign,ii,jj) = talign;
@@ -1304,6 +1365,9 @@ if loadprevious == 0 % run new analysis
                         if emptytype == 1
                             ltfittype = []; % empty for next file
                         end
+                        if emptybase == 1
+                            basefittype = []; % empty for next file
+                        end
                         if autoconv == 1
                             filenameconv = []; % empty for next file
                         end
@@ -1316,20 +1380,21 @@ if loadprevious == 0 % run new analysis
         end
     end
     if writeprocyn == 1 && filetype ~= 3 % write batch file
-        writematrix(master,'batch_align_flattenedv8.md','FileType','text') % backup, not very useful
+        writematrix(master,'batch.dat','FileType','text') % backup, not very useful
         writematrix([size(master) targetfolders],'add_info.yml','FileType','text'); % additional info
     end
     if runtype == 0 % close background figures if not a test run
         close all;
     end
 else % reload previously processed data
-    addinfo = importdata('add_info.yml');
+    addinfo = importdata('add_info.yml'); % load info from previous analysis
     master_size = addinfo(1:4);
     master = NaN(master_size(1),master_size(2),master_size(3),master_size(4));
     targetfolders = addinfo(5:end);
     D = pwd; % get current directory
     S = dir(fullfile(D,'*')); % search current directory
     N = setdiff({S([S.isdir]).name},{'.','..'}); % subfolders of D
+    emptydatcount = 0;
     for ii = folders
         T = dir(fullfile(D,N{ii},'*_proc.dat'));
         C = {T(~[T.isdir]).name}; % all proc files
@@ -1339,6 +1404,28 @@ else % reload previously processed data
                 tempimport = importdata(F);
                 master(1:height(tempimport),1:width(tempimport),ii,jj) = tempimport;
             end
+        else
+            emptydatcount = emptydatcount+1;
+        end
+    end
+    if emptydatcount == length(folders) % no proc.dat files found
+        checkdat = dir('batch.dat');
+        warning('Loading from batch.dat - master array may have errors.');
+        if isempty(checkdat) == 0 % found batch.dat
+            batchmaster = importdata('batch.dat');
+            if width(batchmaster) == master_size(2)*master_size(3)*master_size(4)
+                for ii=1:master_size(3)
+                    for jj=1:master_size(4)
+                        startcol = 1+master_size(2)*(ii+2*jj-3);
+                        endcol = startcol+master_size(2)-1;
+                        master(:,:,ii,jj) = batchmaster(1:master_size(1),startcol:endcol);
+                    end
+                end
+            else
+                error('Batch.dat size is mismatched with addinfo.yml - please rerun analysis.');
+            end
+        else
+            error('No batch processed files found - please rerun analysis.');
         end
     end
 end
@@ -1360,13 +1447,15 @@ clearvars -except targetfolders maste* ind*
 figvis = 'on';
 
 % Default contour code
-subset = targetfolders; % data to visualize
+subset = targetfolders;
+%subset = targetfolders([1:7 9:end]); % data to visualize
+%subset = 2:5;
 
-% Set up vectors
+% Set up arrays
 time = NaN(length(subset),max(master(indrtlist,indcvalue,:,:),[],"all"));
 timealign = NaN(length(subset),max(master(indralignlength,indcvalue,:,:),[],"all"));
 prb = NaN(max(master(indrnfiles,indcvalue,:,:),[],"all"),length(subset));
-wIR = NaN(max(master(indrnfiles,indcvalue,:,:),[],"all"),length(subset));
+wIR = prb; lt1 = prb; lt2 = prb; ltr = prb;
 csig = NaN(height(wIR),width(time),length(subset));
 csiga = NaN(height(prb),width(timealign),length(subset));
 
@@ -1376,20 +1465,27 @@ for i=1:length(subset)
     alength = master(indralignlength,indcvalue,subset(i),1);
     nfiles = master(indrnfiles,indcvalue,subset(i),1);
     time(i,1:tlength) = squeeze(master(1:tlength,indct,subset(i),1)).';
-    wIR(1:nfiles,i) = squeeze(master(indrIRWN,indcvalue,subset(i),1:nfiles));
-    csig(1:nfiles,1:tlength,i) = squeeze(master(1:tlength,indccorrsig,subset(i),1:nfiles)).';
-    prb(1:nfiles,i) = squeeze(master(indrprobe,indcvalue,subset(i),1:nfiles));
     timealign(i,1:alength) = squeeze(master(1:alength,indctalign,subset(i),1)).';
+    prb(1:nfiles,i) = squeeze(master(indrprobe,indcvalue,subset(i),1:nfiles));
+    wIR(1:nfiles,i) = squeeze(master(indrIRWN,indcvalue,subset(i),1:nfiles));
+    lt1(1:nfiles,i) = squeeze(master(indrlifetime1,indcvalue,subset(i),1:nfiles));
+    lt2(1:nfiles,i) = squeeze(master(indrlifetime2,indcvalue,subset(i),1:nfiles));
+    ltr(1:nfiles,i) = squeeze(master(indrlt1lt2,indcvalue,subset(i),1:nfiles));
+    csig(1:nfiles,1:tlength,i) = squeeze(master(1:tlength,indccorrsig,subset(i),1:nfiles)).';
     csiga(1:nfiles,1:alength,i) = squeeze(master(1:alength,indcsigalign,subset(i),1:nfiles)).';
 end
 
+lmax = 696; % λmax (nm) for Rh800
+
 % Plotting
 for i=1:length(subset)
-    fineness = 100;
     if length(unique(rmmissing(prb(:,i)))) == 1 % no probe tuning --> IR sweep
         xstring = 'Time delay (ps)';
         ystring = 'ω_{IR}/2πc (cm^{-1})';
         w1 = wIR(:,i);
+        w2 = prb(:,i);
+        nonswept = string(round(w2(1)))+' nm sweep';
+        bandsize = 1e7./w2+w1-1e7/lmax;
         t1 = time(i,:); 
         sigmatrix = csig(:,:,i);
         % Purple-white-green gradient for contour map
@@ -1399,48 +1495,134 @@ for i=1:length(subset)
         xstring = 'Compensated time delay (ps)';
         ystring = 'λ_{probe} (nm)';
         w1 = prb(:,i);
+        w2 = wIR(:,i);
+        nonswept = string(round(w2(1)))+' cm^{-1} sweep';
+        bandsize = 1e7./w1+w2-1e7/lmax;
         t1 = timealign(i,:);
         sigmatrix = csiga(:,:,i);
-        % Red-white-blue gradient for contour map
+        % Blue-white-orange gradient for contour map
         startcolor = [0 0 1]; % blue
-        endcolor = [1 0 0]; % red
+        endcolor = [1 0.5 0]; % orange
     end
-    % Auto-sorting
-    [t1,tind] = sort(t1);
-    [w1,wind] = sort(w1);
-    sigmatrix = sigmatrix(wind,tind);
 
-    % Color mapping
-    map1 = [linspace(startcolor(1),1,fineness) linspace(1,endcolor(1),fineness)];
-    map2 = [linspace(startcolor(2),1,fineness) linspace(1,endcolor(2),fineness)];
-    map3 = [linspace(startcolor(3),1,fineness) linspace(1,endcolor(3),fineness)];
-    map = [map1.' map2.' map3.'];
-
-    [x1,x2] = meshgrid(t1,w1);
-    figure('visible',figvis);
-    tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
-    nexttile([1 3]); % peak vs time
-    plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2);
-    %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
-    xlim([min(t1) max(t1)]); 
-    xlabel(xstring); ylabel('Peak (AU)');
-    nexttile([3 3]);
-    contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
-    cb.Label.String='Corrected signal (AU)';
-    cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
-    xlabel(xstring); ylabel(ystring);
-    xlim([min(t1) max(t1)]);
-    ylim([min(w1) max(w1)]);
-    nexttile([1 1]); xticks([]); yticks([]); % blank square
-    annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
-    nexttile([3 1]); % peak vs freq
-    plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2);
-    %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
-    ylim([min(w1) max(w1)]);
-    xlabel('Peak (AU)'); ylabel(ystring);
+    if length(rmmissing(w1)) > 1
+        % Auto-sorting
+        [t1,tind] = sort(t1);
+        [w1,wind] = sort(w1);
+        [x1,x2] = meshgrid(t1,w1);
+        sigmatrix = sigmatrix(wind,tind);
+        logsigmatrix = log(abs(sigmatrix));
+    
+        % Color mapping
+        map1 = [linspace(startcolor(1),1,100) linspace(1,endcolor(1),100)];
+        map2 = [linspace(startcolor(2),1,100) linspace(1,endcolor(2),100)];
+        map3 = [linspace(startcolor(3),1,100) linspace(1,endcolor(3),100)];
+        map = [map1.' map2.' map3.'];
+        
+        % Plotting
+        figure('visible',figvis);
+        tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
+        %tiledlayout(3,6,'TileSpacing','compact','Padding','compact');
+    
+        % Peak vs time
+        %nexttile([1 2]);
+        nexttile([1 3]);
+        plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2);
+        %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
+        xlim([min(t1) max(t1)]); xlabel(xstring); ylabel('Peak (AU)');
+    
+        % % Log contour
+        % nexttile([1 2]); contourf(x1,x2,logsigmatrix); colormap(map);
+        % 
+        % % τ1
+        % nexttile([1 2]);
+        % plot(bandsize,lt1(:,i),'LineWidth',2);
+        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{1} (ps)');
+        % xlim([min(bandsize) max(bandsize)]);
+    
+        % Normal contour
+        %nexttile([2 2]);
+        nexttile([3 3]);
+        contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
+        cb.Label.String='Corrected signal at '+nonswept+' (AU)';
+        cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
+        xlabel(xstring); ylabel(ystring);
+        xlim([min(t1) max(t1)]); ylim([min(w1) max(w1)]);
+        
+        % Blank square (top-right)
+        nexttile([1 1]);
+        xticks([]); yticks([]);
+        annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
+        
+        % Peak vs wIR or λprobe
+        %nexttile([2 2]); 
+        nexttile([3 1]);
+        plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2);
+        %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
+        ylim([min(w1) max(w1)]);
+        xlabel('Peak (AU)'); ylabel(ystring);
+        
+        % % τ2
+        % nexttile([1 2]);
+        % plot(bandsize,lt2(:,i),'LineWidth',2);
+        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{2} (ps)');
+        % xlim([min(bandsize) max(bandsize)]);
+        % 
+        % % A1/A2
+        % nexttile([1 2]);
+        % semilogy(bandsize,ltr(:,i),'LineWidth',2);
+        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+        % xlim([min(bandsize) max(bandsize)]); ylim([-Inf 100]);
+    end
 end
 
+% Compare lifetimes
+ltlegend = strings(length(subset),1);
+figure('visible',figvis);
+tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+% τ1
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,lt1(:,i),'Color',linecolor,'LineWidth',2);
+    ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+end
+xticks([]); ylabel('τ_{1} (ps)');
+hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 6]); legend(ltlegend);
+% τ2
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,lt2(:,i),'Color',linecolor,'LineWidth',2);
+end
+xticks([]); ylabel('τ_{2} (ps)');
+hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 20]); legend(ltlegend);
+% A1/A2
+nexttile([2 1]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,ltr(:,i),'Color',linecolor,'LineWidth',2);
+end
+set(gca,'Yscale','log');
+xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+xlim([min(bandsize) max(bandsize)]); ylim([0.1 10]); legend(ltlegend);
 
+
+% Get average pulse width
+pulsewidths = squeeze(master(7,indcfitval,:,:))./sqrt(2);
+meanpw = mean(pulsewidths,2);
+
+% Check time zero during sweep
+timezero = squeeze(master(6,indcfitval,:,:));
 
 %% Functions
 
