@@ -18,14 +18,15 @@
 % added per-folder pulse width specification, added loading from batch.dat,
 % added support for Windows file system, made smoother fit curves, 
 % improved info file support, added auto-baseline fit type selection
+%%% v11 - housekeeping, added chopping to IR power normalization
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_02-05/'
+%cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_02-05/'
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
-runtype = 0; % 0 = process all, 1 = test run with a few files,
+runtype = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
 targetfolders = []; % indices of folders to process, [] = dialog
 t0pos = 176.9; % specify t0 position (mm), [] = autofind
@@ -35,8 +36,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 % 2 = Gaussian*biexp, 3 = Gauss*stretchexp
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
-writeprocyn = 1; % 1 = write batch processed files, 0 = not
-writefigsyn = 1; % 1 = write figure files, 0 = not
+writeprocyn = 0; % 1 = write batch processed files, 0 = not
+writefigsyn = 0; % 1 = write figure files, 0 = not
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 tempmod = 0; % 1 = temporal modulation in place, 0 = no beamsplitters
@@ -771,6 +772,9 @@ if loadprevious == 0 % run new analysis
                                     if isempty(prbpower) == 1 % if no probe power found
                                         prbpower = prbpowerset; % set to power from config
                                     end
+                                    if DFGWN == IRWN
+                                        IRpower = IRpower/2; % lose 50% power to chopper (DFG only)
+                                    end
                                     signal = signal*normIRpower/IRpower;
                                     sigsds = sigsds*normIRpower/IRpower;
                                     DC = DC*normIRpower/IRpower;
@@ -1211,10 +1215,24 @@ if loadprevious == 0 % run new analysis
                                     outname = string(F(1:end-4));
                                 end
                         
-                                if ltfittype > 0 % prepare figure legend
-                                    legend1 = {'Data','Baseline data','Baseline','Fit'};
+                                if basefittype > 0
+                                    if basefittype == 1
+                                        basestring = 'Linear baseline';
+                                    end
+                                    if basefittype == 2
+                                        basetring = 'Exponential baseline';
+                                    end
+                                    if basefittype == 3
+                                        basestring = 'Exp + linear baseline';
+                                    end
                                 else
-                                    legend1 = {'Data','Baseline data','Baseline'};
+                                    basestring = 'Baseline';
+                                end
+
+                                if ltfittype > 0 % prepare figure legend
+                                    legend1 = {'Data','Baseline data',basestring,'Fit'};
+                                else
+                                    legend1 = {'Data','Baseline data',basestring};
                                 end
                                 if powernormyn > 0 % prepare y-axis normalization label
                                     normlabel = 'Norm. ';
@@ -1448,8 +1466,6 @@ figvis = 'on';
 
 % Default contour code
 subset = targetfolders;
-%subset = targetfolders([1:7 9:end]); % data to visualize
-%subset = 2:5;
 
 % Set up arrays
 time = NaN(length(subset),max(master(indrtlist,indcvalue,:,:),[],"all"));
@@ -1475,8 +1491,6 @@ for i=1:length(subset)
     csiga(1:nfiles,1:alength,i) = squeeze(master(1:alength,indcsigalign,subset(i),1:nfiles)).';
 end
 
-lmax = 696; % λmax (nm) for Rh800
-
 % Plotting
 for i=1:length(subset)
     if length(unique(rmmissing(prb(:,i)))) == 1 % no probe tuning --> IR sweep
@@ -1484,8 +1498,8 @@ for i=1:length(subset)
         ystring = 'ω_{IR}/2πc (cm^{-1})';
         w1 = wIR(:,i);
         w2 = prb(:,i);
-        nonswept = string(round(w2(1)))+' nm sweep';
-        bandsize = 1e7./w2+w1-1e7/lmax;
+        nonswept = string(round(w2(1)))+' nm';
+        bandsize = 1e7./w2+w1-1e7/696;
         t1 = time(i,:); 
         sigmatrix = csig(:,:,i);
         % Purple-white-green gradient for contour map
@@ -1496,8 +1510,8 @@ for i=1:length(subset)
         ystring = 'λ_{probe} (nm)';
         w1 = prb(:,i);
         w2 = wIR(:,i);
-        nonswept = string(round(w2(1)))+' cm^{-1} sweep';
-        bandsize = 1e7./w1+w2-1e7/lmax;
+        nonswept = string(round(w2(1)))+' cm^{-1}';
+        bandsize = 1e7./w1+w2-1e7/696;
         t1 = timealign(i,:);
         sigmatrix = csiga(:,:,i);
         % Blue-white-orange gradient for contour map
@@ -1531,15 +1545,6 @@ for i=1:length(subset)
         %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
         xlim([min(t1) max(t1)]); xlabel(xstring); ylabel('Peak (AU)');
     
-        % % Log contour
-        % nexttile([1 2]); contourf(x1,x2,logsigmatrix); colormap(map);
-        % 
-        % % τ1
-        % nexttile([1 2]);
-        % plot(bandsize,lt1(:,i),'LineWidth',2);
-        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{1} (ps)');
-        % xlim([min(bandsize) max(bandsize)]);
-    
         % Normal contour
         %nexttile([2 2]);
         nexttile([3 3]);
@@ -1561,68 +1566,49 @@ for i=1:length(subset)
         %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
         ylim([min(w1) max(w1)]);
         xlabel('Peak (AU)'); ylabel(ystring);
-        
-        % % τ2
-        % nexttile([1 2]);
-        % plot(bandsize,lt2(:,i),'LineWidth',2);
-        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{2} (ps)');
-        % xlim([min(bandsize) max(bandsize)]);
-        % 
-        % % A1/A2
-        % nexttile([1 2]);
-        % semilogy(bandsize,ltr(:,i),'LineWidth',2);
-        % xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
-        % xlim([min(bandsize) max(bandsize)]); ylim([-Inf 100]);
     end
 end
 
-% Compare lifetimes
-ltlegend = strings(length(subset),1);
-figure('visible',figvis);
-tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
-% τ1
-nexttile([1 2]); hold on;
-for i=1:length(subset)
-    redamt = exp((i-length(subset))*2/length(subset));
-    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-    blueamt = exp(-2*i/length(subset));
-    linecolor = [redamt greenamt blueamt];
-    plot(bandsize,lt1(:,i),'Color',linecolor,'LineWidth',2);
-    ltlegend(i) = string(wIR(1,i))+' cm{-1}';
-end
-xticks([]); ylabel('τ_{1} (ps)');
-hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 6]); legend(ltlegend);
-% τ2
-nexttile([1 2]); hold on;
-for i=1:length(subset)
-    redamt = exp((i-length(subset))*2/length(subset));
-    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-    blueamt = exp(-2*i/length(subset));
-    linecolor = [redamt greenamt blueamt];
-    plot(bandsize,lt2(:,i),'Color',linecolor,'LineWidth',2);
-end
-xticks([]); ylabel('τ_{2} (ps)');
-hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 20]); legend(ltlegend);
-% A1/A2
-nexttile([2 1]); hold on;
-for i=1:length(subset)
-    redamt = exp((i-length(subset))*2/length(subset));
-    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-    blueamt = exp(-2*i/length(subset));
-    linecolor = [redamt greenamt blueamt];
-    plot(bandsize,ltr(:,i),'Color',linecolor,'LineWidth',2);
-end
-set(gca,'Yscale','log');
-xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
-xlim([min(bandsize) max(bandsize)]); ylim([0.1 10]); legend(ltlegend);
+% % Default lifetime comparison
+% ltlegend = strings(length(subset),1);
+% figure('visible',figvis);
+% tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+% % τ1
+% nexttile([1 2]); hold on;
+% for i=1:length(subset)
+%     redamt = exp((i-length(subset))*2/length(subset));
+%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+%     blueamt = exp(-2*i/length(subset));
+%     linecolor = [redamt greenamt blueamt];
+%     plot(bandsize,lt1(:,i),'Color',linecolor,'LineWidth',2);
+%     ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+% end
+% xticks([]); ylabel('τ_{1} (ps)');
+% hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 6]); legend(ltlegend);
+% % τ2
+% nexttile([1 2]); hold on;
+% for i=1:length(subset)
+%     redamt = exp((i-length(subset))*2/length(subset));
+%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+%     blueamt = exp(-2*i/length(subset));
+%     linecolor = [redamt greenamt blueamt];
+%     plot(bandsize,lt2(:,i),'Color',linecolor,'LineWidth',2);
+% end
+% xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{2} (ps)');
+% hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 20]); legend(ltlegend);
+% % A1/A2
+% nexttile([2 1]); hold on;
+% for i=1:length(subset)
+%     redamt = exp((i-length(subset))*2/length(subset));
+%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+%     blueamt = exp(-2*i/length(subset));
+%     linecolor = [redamt greenamt blueamt];
+%     plot(bandsize,ltr(:,i),'Color',linecolor,'LineWidth',2);
+% end
+% set(gca,'Yscale','log');
+% xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+% xlim([min(bandsize) max(bandsize)]); ylim([0.1 10]); legend(ltlegend);
 
-
-% Get average pulse width
-pulsewidths = squeeze(master(7,indcfitval,:,:))./sqrt(2);
-meanpw = mean(pulsewidths,2);
-
-% Check time zero during sweep
-timezero = squeeze(master(6,indcfitval,:,:));
 
 %% Functions
 
