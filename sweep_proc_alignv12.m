@@ -19,16 +19,17 @@
 % added support for Windows file system, made smoother fit curves, 
 % improved info file support, added auto-baseline fit type selection
 %%% v11 - housekeeping, added chopping to IR power normalization
+%%% v12 - updated contours
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_02-05/'
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_02-05/'
 clear; clc; close all;
 
 % Main configuration options
-loadprevious = 0; % 0 = new analysis, 1 = load previous, [] = auto-detect
-runtype = 2; % 0 = process all, 1 = test run with a few files,
+loadprevious = 1; % 0 = new analysis, 1 = load previous, [] = auto-detect
+runtype = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file
-targetfolders = []; % indices of folders to process, [] = dialog
+targetfolders = 1:18; % indices of folders to process, [] = dialog
 t0pos = 176.9; % specify t0 position (mm), [] = autofind
 
 % Additional configuration options
@@ -36,8 +37,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 % 2 = Gaussian*biexp, 3 = Gauss*stretchexp
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
-writeprocyn = 0; % 1 = write batch processed files, 0 = not
-writefigsyn = 0; % 1 = write figure files, 0 = not
+writeprocyn = 1; % 1 = write batch processed files, 0 = not
+writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 tempmod = 0; % 1 = temporal modulation in place, 0 = no beamsplitters
@@ -1462,10 +1463,12 @@ end
 
 clc; close all;
 clearvars -except targetfolders maste* ind*
-figvis = 'on';
+figvis = 'off';
 
 % Default contour code
 subset = targetfolders;
+%subset = [2 13 14]; % 1590 band
+subset = 11; % 1660
 
 % Set up arrays
 time = NaN(length(subset),max(master(indrtlist,indcvalue,:,:),[],"all"));
@@ -1538,12 +1541,12 @@ for i=1:length(subset)
         tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
         %tiledlayout(3,6,'TileSpacing','compact','Padding','compact');
     
-        % Peak vs time
+        % Time 1D cross-section
         %nexttile([1 2]);
         nexttile([1 3]);
-        plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2);
-        %plot(t1,sum(sigmatrix,1),'Color',startcolor,'LineWidth',2); % sum - not as useful
-        xlim([min(t1) max(t1)]); xlabel(xstring); ylabel('Peak (AU)');
+        %plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2); ylabel('Peak (AU)');
+        plot(t1,sum(sigmatrix(1:length(rmmissing(w1)),:)/length(rmmissing(w1)),1),'Color',startcolor,'LineWidth',2); ylabel('Mean (AU)');
+        xlim([min(t1) max(t1)]); xlabel(xstring);
     
         % Normal contour
         %nexttile([2 2]);
@@ -1559,55 +1562,168 @@ for i=1:length(subset)
         xticks([]); yticks([]);
         annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
         
-        % Peak vs wIR or λprobe
+        % Frequency 1D cross-section
         %nexttile([2 2]); 
         nexttile([3 1]);
-        plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2);
-        %plot(sum(sigmatrix,2),w1,'Color',endcolor,'LineWidth',2); % sum - not as useful
-        ylim([min(w1) max(w1)]);
-        xlabel('Peak (AU)'); ylabel(ystring);
+        plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2); xlabel('Peak (AU)');
+        %plot(sum(sigmatrix(:,1:length(rmmissing(t1))),2)/length(rmmissing(t1)),w1,'Color',endcolor,'LineWidth',2); xlabel('Mean (AU)');
+        ylim([min(w1) max(w1)]); ylabel(ystring);
     end
 end
 
-% % Default lifetime comparison
-% ltlegend = strings(length(subset),1);
-% figure('visible',figvis);
-% tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
-% % τ1
-% nexttile([1 2]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(bandsize,lt1(:,i),'Color',linecolor,'LineWidth',2);
-%     ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+% Default lifetime comparison
+ltlegend = strings(length(subset),1);
+figure('visible',figvis);
+tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+% τ1
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,lt1(:,i),'Color',linecolor,'LineWidth',2);
+    ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+end
+xticks([]); ylabel('τ_{1} (ps)');
+hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 6]); legend(ltlegend);
+% τ2
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,lt2(:,i),'Color',linecolor,'LineWidth',2);
+end
+xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{2} (ps)');
+hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 20]); legend(ltlegend);
+% A1/A2
+nexttile([2 1]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(bandsize,ltr(:,i),'Color',linecolor,'LineWidth',2);
+end
+set(gca,'Yscale','log');
+xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+xlim([min(bandsize) max(bandsize)]); ylim([0.1 10]); legend(ltlegend);
+
+tf = rmmissing(t1);
+meantime1660 = rmmissing(sum(sigmatrix(1:length(rmmissing(w1)),:)/length(rmmissing(w1))));
+tpafit = fit(tf.',meantime1660.','gauss1');
+
+figure; 
+hold on;
+plot(tf,meantime1660);
+plot(tpafit);
+hold off;
+
+a = (tpafit.c1).^2;
+b = a/2;
+c = sqrt(b);
+TPAFWHM = c*2*sqrt(2*log(2)); % not really correct because the fit isn't great
+
+%% Convolution sanity check
+clear; close all; clc;
+time = linspace(-100,100,1001);
+g1 = exp(-0.001*(time-50).^2);
+g2 = exp(-10*(time).^2);
+gconv = conv(g2,g1);
+gconv = gconv/max(gconv);
+%newt = linspace(min(time),max(time),length(gconv)); % old way - this is WRONG!!
+% Welp... fuck
+
+newt = linspace(2*min(time),2*max(time),length(gconv)); % correct way - spacing doesn't change, length does...
+
+% Can move the big Gaussian in time, but not the small one
+
+
+figure; hold on; plot(time,g1,'-','LineWidth',2); plot(time,g2,'-','LineWidth',2); 
+plot(newt,gconv,'--','LineWidth',2)
+hold off;
+
+% What about cross-correlation? (xcorr)
+
+crosscorr = xcorr(g1,g2);
+% literally the same as convolution
+
+figure; plot(newt,crosscorr)
+
+
+%%% Copy of fitting fit_temporalv1 (used EMG)
+%% Fit temporal sweep data as exponentially modified Gaussian
+%%% (convolution of Gaussian and exponential decay)
+
+% Load data
+data = importdata('test.txt');
+
+% Parse data
+x = data(:,1); % time as x
+AC = data(:,2);
+
+
+%%% Set cutoffs for baseline fitting
+% Want to exclude points between xlow and xhigh
+% xlow = x(10); % xlow set as 10th data point
+% xhigh = x(end-6); % xhigh set as 7th-to-last data point
+% 
+% %%% Setup excluded points for baseline fitting
+% excludeDupes = zeros(size(x)); % using length(x) gives a matrix
+% for i = 1:length(x)
+%     if x(i) > xlow && x(i) < xhigh
+%         excludeDupes(i) = i;
+%     end
 % end
-% xticks([]); ylabel('τ_{1} (ps)');
-% hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 6]); legend(ltlegend);
-% % τ2
-% nexttile([1 2]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(bandsize,lt2(:,i),'Color',linecolor,'LineWidth',2);
-% end
-% xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('τ_{2} (ps)');
-% hold off; xlim([min(bandsize) max(bandsize)]); ylim([0 20]); legend(ltlegend);
-% % A1/A2
-% nexttile([2 1]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(bandsize,ltr(:,i),'Color',linecolor,'LineWidth',2);
-% end
-% set(gca,'Yscale','log');
-% xlabel('ω_{IR}+ω_{probe}–ω_{vis} (cm^{-1})'); ylabel('A_{1}/A_{2}');
-% xlim([min(bandsize) max(bandsize)]); ylim([0.1 10]); legend(ltlegend);
+% 
+% %%% Remove duplicates from exclude list
+% excludeunique = unique(excludeDupes(:).'); % adding the .' transposes it into a row vector
+% exclude1 = nonzeros(excludeunique); % isolate nonzero data positions to exclude
+% 
+% %%% Fit baselines with lines
+% f1 = fit(x,DC,'poly1','Exclude',exclude1);
+% f2 = fit(x,AC,'poly1','Exclude',exclude1);
+% 
+% %%% Baseline correction
+% % Save coefficient values from fit to vector
+% fitcoefDC = coeffvalues(f1);
+% fitcoefAC = coeffvalues(f2);
+% 
+% % Create vectors of fitted values
+% fitDC = polyval(fitcoefDC,x);
+% fitAC = polyval(fitcoefAC,x);
+% 
+% % Subtract fit vectors from raw data
+% corrDC = DC-fitDC;
+% corrAC = AC-fitAC;
+corrAC = AC;
+
+% Specify fit options first
+guesses = [1 1 1 1];
+fo = fitoptions('Method','NonlinearLeastSquares', ...
+    'StartPoint',guesses, ... % initial guesses
+    'Lower',[0 0 -inf 0]); % set lower bounds
+% Define fitting function - exponentially modified Gaussian
+% A is amplitude, mx is the center (mean in x) in mm, 
+% l is the exponential rate in mm-1, s is the Gaussian stdev in mm
+posfit = fittype(['A*0.5*l*exp(0.5*l*(2*mx+l*s^2-2*x))*' ...
+    '(1-erf((mx+l*s^2-x)/(s*sqrt(2))))'],'options',fo);
+
+[curve,gof] = fit(x,corrAC,posfit);
+
+figure;
+plot(x,corrAC)
+hold on
+plot(curve)
+hold off
+xlabel('Time (ps)')
+ylabel('Corrected AC signal (AU)')
+
+% Lifetime matches result from fityk: 1.186 ps
+
+
 
 
 %% Functions
