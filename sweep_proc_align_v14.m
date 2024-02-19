@@ -23,9 +23,11 @@
 %%%%%%%%%%%%
 %%% v13 - fixed time delay spacing (big change!), updated default plots,
 % added FFT to master array
+%%% v14 - cleaned up power corrections, bug fixes, added SRR and manual
+% fitting, added more default vectors to post-batch analysis
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_01_22'
+%cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_02_14/'
 clear; clc; close all;
 
 % Main configuration options
@@ -37,17 +39,17 @@ t0pos = []; % specify t0 position (mm), [] = autofind
 
 % Additional configuration options
 ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
-% 2 = Gaussian*biexp, 3 = Gauss*stretchexp
+% 2 = Gaussian*biexp, 3 = Gauss*stretchexp, 4 = Gauss*strbiexp
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
-writeprocyn = 0; % 1 = write batch processed files, 0 = not
-writefigsyn = 0; % 1 = write figure files, 0 = not
+writeprocyn = 1; % 1 = write batch processed files, 0 = not
+writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormyn = 0; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 floatbase = 0.1; % fraction to float baseline coeffs (0.1 -> +/- 10%)
 cutlow = 0.05; % lower baseline fit cutoff, (default 5th %ile)
-cuthigh = 0.95; % upper baseline fit cutoff, (default 95th %ile)
+cuthigh = 0.8; % upper baseline fit cutoff, (default 95th %ile)
 verbose = 2; % 2 = all info on figure, 1 = regular figure annotation, 
 % 0 = no figure annotation
 troubleshoot = 0; % 0 = default, 1 = show everything along the way
@@ -59,10 +61,11 @@ PMT = 1; % PMT gain (norm to 1, auto-update if possible)
 prbpowerset = 300; % probe power in mW (auto-update if possible)
 IRpowerset = 70; % IR power in mW (auto-update if possible)
 normIRpower = 50; % IR power on-sample to normalize to (default is 50)
-normprobepower = 1.5; % probe power on-sample to normalize to (default 1.5)
+normprobepower = 1; % probe power on-sample to normalize to (default 1)
+pinholeyn = 0; % 0 = bypassed, 1 = in place
 trimlastT = 0; % how many points to remove from end of Tlist (default 0)
 trimfirstT = 0; % points to remove from start of Tlist (default 0)
-ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.01)
+ltmin = [];  % define minimum lifetime (ps) in fit, [] = default (0.1)
 ltmax = []; % define maximum lifetime (ps) in fit, [] = default (100)
 tuningrate = []; % PicoEmerald signal t0 tuning rate (ps/nm), [] = auto
 minprobe = []; maxprobe = []; % probe range for aligning tD, [] = auto-find
@@ -347,7 +350,6 @@ if loadprevious == 0 % run new analysis
                 master_size = size(master);
             
                 if powernormyn > 0 % prep for power normalization
-                    IRpower = []; prbpower = [];
                     if tempmod == 1 % pre-load beamsplitter response curve if needed
                         BSdata = importdata('/Users/pkocheril/Documents/Caltech/Wei Lab/Spreadsheets/BP145B2/BP145B2.csv');
                     end
@@ -378,7 +380,7 @@ if loadprevious == 0 % run new analysis
                     end
                 end
                 C = {T(~[T.isdir]).name}; % all data files
-                if numel(C) == numel(infofiles)
+                if numel(infofiles) >= numel(C) % can have extra infofiles during scanning
                     infofound = 1;
                 else
                     infofound = 0;
@@ -397,7 +399,10 @@ if loadprevious == 0 % run new analysis
                 if isempty(T) == 0 % skip subfolders without data files
                     for jj = startjj:totalfilesC % jj = file number in subfolder ii
                         F = fullfile(D,N{ii},C{jj}); % current file
+
+                        % Empty parameters for new file
                         IRpower = []; prbpower = [];
+
                         if isempty(filenameconv) == 1
                             autoconv = 1;
                         else
@@ -534,14 +539,14 @@ if loadprevious == 0 % run new analysis
                                     PMT = infofile(22); % PMT gain
                                     PMTBW = 1e3*infofile(23); % PMT bandwidth (kHz in file)
                                     modfreq = 1e3*infofile(24); % IR modulation frequency (kHz in file)
-                                    pinholeyn = infofile(25); % 0 = bypasssed, 1 = in place
+                                    pinholeyn = infofile(25); % 0 = bypassed, 1 = in place
                                     prbdichroic = infofile(26);
                                     pmtcmosmirror = infofile(27);
                                     pmtfilter = infofile(28);
                                     spcmfilter = infofile(29);
                                     cmosfilter = infofile(30);
                                 end
-                            else % if not extended info
+                            else % if not extended info - guess additional parameters
                                 if verbose == 2
                                     verbose = 1; % can't print out experimental parameters
                                 end
@@ -599,6 +604,15 @@ if loadprevious == 0 % run new analysis
                         if isempty(prbpower) == 1 % if no probe power found
                             prbpower = prbpowerset; % set to power from config
                         end
+
+                        % Power corrections
+                        if DFGWN == IRWN
+                            IRpower = IRpower/2; % lose 50% power to chopper (DFG only)
+                        end
+                        if pinholeyn == 1
+                            prbpower = 0.27*prbpower;
+                        end
+                        prbpower = prbpower/(10^(ND));
             
                         % Load data
                         if filetype == 1 % load data from .txt
@@ -793,34 +807,21 @@ if loadprevious == 0 % run new analysis
 
                                 nonnormsig = signal;
                                 if powernormyn > 0 % power normalization
-                                    if isempty(IRpower) == 1 % if no IR power found
-                                        IRpower = IRpowerset; % set to power from config
-                                    end
-                                    if isempty(prbpower) == 1 % if no probe power found
-                                        prbpower = prbpowerset; % set to power from config
-                                    end
-                                    if DFGWN == IRWN
-                                        IRpower = IRpower/2; % lose 50% power to chopper (DFG only)
-                                    end
-                                    signal = signal*normIRpower/IRpower;
-                                    sigsds = sigsds*normIRpower/IRpower;
-                                    DC = DC*normIRpower/IRpower;
-                                    DCsds = DCsds*normIRpower/IRpower;
+                                    signal = signal./IRpower;
+                                    sigsds = sigsds./IRpower;
+                                    DC = DC./IRpower;
+                                    DCsds = DCsds./IRpower;
         
                                     if powernormyn > 1 % 2 = IR and probe
-                                        prbpower = 0.25*prbpower; % loss from pinhole, 250 mW -> 62.5 mW
                                         if tempmod == 1 % correct for temporal modulation
                                             transmittance = BSdata.data(prbWL,1)/100; % picoEmerald is p-polarized (horizontal)
                                             reflectance = BSdata.data(prbWL,4)/100; % CSV in %
                                             prbpower = transmittance*reflectance*prbpower; % 62.5 mW -> 15.6 mW
                                         end
-                                        prbpower = prbpower/(10^(ND)); % ND1: 15.6 mW -> 1.56 mW
-                                        signal = signal*(normprobepower/prbpower);
-                                        sigsds = sigsds*(normprobepower/prbpower);
-                                        if pairedDCAC > 0
-                                            DC = DC*(normprobepower/prbpower);
-                                            DCsds = DCsds*(normprobepower/prbpower);
-                                        end
+                                        signal = signal./prbpower;
+                                        sigsds = sigsds./prbpower;
+                                        DC = DC./prbpower;
+                                        DCsds = DCsds./prbpower;
                                         if powernormyn > 2 % 3 = PMT gain correction
                                             gaincurve = importdata('/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2023_04_28/PMT Gain Data/gain_calibration_curve.txt');
                                             gainfactor = gaincurve(PMT,2);
@@ -965,6 +966,11 @@ if loadprevious == 0 % run new analysis
                                     if IRWN > 1680 && IRWN < 2400 % triple bond or carbonyl
                                         ltfittype = 1; % single exponential
                                     else
+                                        % if IRWN > 1293 && IRWN < 1315 && prbWL > 699 && prbWL < 760
+                                        %     ltfittype = 4; % biexp (exp + strexp)
+                                        % else
+                                        %     ltfittype = 2; % biexponential
+                                        % end
                                         ltfittype = 2; % biexponential
                                     end
                                 else
@@ -992,8 +998,13 @@ if loadprevious == 0 % run new analysis
 
                                     % Prepare for signal padding
                                     tintspace = tint(2)-tint(1);
-                                    originallength = length(tint);
-                                    tlong = linspace(tint(1),tint(end)+tintspace*100,length(tint)+100).';
+                                    originallength = length(tint); % should be an odd number
+                                    if mod(originallength-1,4) == 0
+                                        padlength = round(originallength/2)+1;
+                                    else
+                                        padlength = round(originallength/2);
+                                    end
+                                    tlong = linspace(tint(1),tint(end)+tintspace*padlength,length(tint)+padlength).';
                                     baselong = basefit(1)+basefit(2)*exp(-basefit(3)*(tlong-basefit(4)))+...
                                         basefit(5)*tlong;
                                     if basefittype > 0
@@ -1045,11 +1056,11 @@ if loadprevious == 0 % run new analysis
                                     end
                         
                                     % Lower and upper bounds
-                                    lb = [newlbbase,-10,1,... % basecoefs, IRF center (ps), IRF min (ps)
-                                        0,0.01,... % amp 1, τ1min (ps)
-                                        0,0.01,... % amp 2, τ2min (ps)
+                                    lb = [newlbbase,-10,1*sqrt(2),... % basecoefs, IRF center (ps), IRF min (ps)
+                                        0,0.1,... % amp 1, τ1min (ps)
+                                        0,0.1,... % amp 2, τ2min (ps)
                                         1e-2]; % β min
-                                    ub = [newubbase,20,9,... % basecoefs, IRF center (ps), IRF max (ps)
+                                    ub = [newubbase,20,3*sqrt(2),... % basecoefs, IRF center (ps), IRF max (ps)
                                         Inf,100,... % amp 1, τ1max (ps)
                                         Inf,100,... % amp 2, τ2max (ps)
                                         1e2]; % β max
@@ -1106,7 +1117,9 @@ if loadprevious == 0 % run new analysis
                                     fitcurve = spline(tint,fitvector,tfit);
 
                                     if troubleshoot == 1
-                                        figure; plot(tint,sigint,'o',tint,fitvector,'-'); title('Fitting without crop')
+                                        figure; tiledlayout(2,1); nexttile([1 1]); 
+                                        plot(tint,sigint,'o',tint,fitvector,'-'); 
+                                        nexttile([1 1]); plot(tint,sigint-fitvector); title('Fitting without crop')
                                     end
 
                                     % Trim padded signal to original length
@@ -1139,13 +1152,14 @@ if loadprevious == 0 % run new analysis
                         
                                     % Calculate residuals and ssresid
                                     resid = sigint-fitvector;
+                                    srr = sigpeak./std(resid(2:end));
                                     ssresid = sum(resid.^2); % sum of squares of residuals
                                     tss = sum((sigint-mean(sigint)).^2); % total sum of squares
                                     r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
                                     if r2 < 0 % remove nonsense R^2 values
                                         r2 = 0;
                                     end
-                        
+
                                     % FFT of residuals
                                     ts = tint*1e-12; % time, s
                                     dt = abs(ts(1)-ts(2)); % time step, s
@@ -1215,7 +1229,7 @@ if loadprevious == 0 % run new analysis
                                 % Make rounded strings for figure annotation
                                 lt1 = string(sprintf('%0.3g',lifetime1)); % round to 3 sig figs
                                 lt2 = string(sprintf('%0.3g',lifetime2));
-                                sr2 = string(sprintf('%0.3g',r2));
+                                sr2 = string(sprintf('%0.5g',r2));
                                 slt1lt2 = string(sprintf('%0.3g',lt1lt2));
                                 pulsewidth = string(sprintf('%0.3g',FWHM));
                                 
@@ -1223,18 +1237,23 @@ if loadprevious == 0 % run new analysis
                                     annot = {'ω_{IR}/2πc = '+string(IRWN)+' cm^{-1}, λ_{probe} = '+...
                                         string(prbWL)+' nm, SNR = '+string(snr)};
                                     if ltfittype == 1
-                                        annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
+                                        annot(length(annot)+1) = {'SRR = '+string(srr)+', τ_{mono} = '+lt1+...
                                             ' ps, τ_{p} = '+pulsewidth+' ps, r^2 = '+sr2};
                                     end
                                     if ltfittype == 2
-                                        annot(length(annot)+1) = {'τ_1 = '+lt1+' ps, τ_2 = '+...
+                                        annot(length(annot)+1) = {'SRR = '+string(srr)+', τ_1 = '+lt1+' ps, τ_2 = '+...
                                             lt2+' ps, τ_{p} = '+pulsewidth+...
                                             ' ps, A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
                                     end
                                     if ltfittype == 3
-                                        annot(length(annot)+1) = {'τ_{mono} = '+lt1+...
+                                        annot(length(annot)+1) = {'SRR = '+string(srr)+', τ_{mono} = '+lt1+...
                                             ' ps, τ_{p} = '+pulsewidth+' ps, β = '+...
                                             string(fitval(12))+', r^2 = '+sr2};
+                                    end
+                                    if ltfittype == 4
+                                        annot(length(annot)+1) = {'SRR = '+string(srr)+', τ_1 = '+lt1+' ps, τ_2 = '+...
+                                            lt2+' ps, τ_{p} = '+pulsewidth+' ps, β = '+string(fitval(12))+...
+                                            ', A_{1}/A_{2} = '+slt1lt2+', r^2 = '+sr2};
                                     end
                                     if ltfittype > 0 && r2 < 0.7
                                         annot(end) = {'Poor fit, r^2 = ' + sr2};
@@ -1406,8 +1425,6 @@ if loadprevious == 0 % run new analysis
                             Save_tiff(outname+'_proc.tif',lt1array,...
                                 lt2array,ssresidarray,FWHMarray,r2array)
                         end
-                        prbpower = []; % clear powers for next file
-                        IRpower = []; % (otherwise, normalization can compound)
                         if emptytype == 1
                             ltfittype = []; % empty for next file
                         end
@@ -1476,6 +1493,105 @@ else % reload previously processed data
     end
 end
 
+% %% Manual fitting
+% % Do a test run, then come here
+% 
+% % Prepare for signal padding
+% tintspace = tint(2)-tint(1);
+% originallength = length(tint); % should be an odd number
+% if mod(originallength-1,4) == 0
+%     padlength = round(originallength/2)+1;
+% else
+%     padlength = round(originallength/2);
+% end
+% tlong = linspace(tint(1),tint(end)+tintspace*padlength,length(tint)+padlength).';
+% baselong = basefit(1)+basefit(2)*exp(-basefit(3)*(tlong-basefit(4)))+...
+%     basefit(5)*tlong;
+% if basefittype > 0
+%     siglong = baselong;
+%     siglong(1:length(sigint)) = sigint;
+% else
+%     if peaksign == 1
+%         siglong(length(sigint)+1:length(tlong)) = min(sigint(end-5:end));
+%     else
+%         siglong(length(sigint)+1:length(tlong)) = max(sigint(end-5:end));
+%     end
+% end
+% 
+% % Signal padding for short-tailed data
+% if padsignal == 1
+%     tint = tlong;
+%     sigint = siglong;
+%     if troubleshoot == 1
+%         figure; plot(tint,sigint,'-o',t,signal,'o'); title('Padding');
+%     end
+% end
+% 
+% tc = linspace(0.5*min(tint),0.5*max(tint),0.5*(length(tint)+1)).';
+% fun = @(r) r(1)+r(2)*exp(-r(3)*(tint-r(4)))+r(5)*tint+ ... % baseline
+%     conv(exp(-((tc-r(6))./(r(7)/(2*sqrt(log(2))))).^2), ...
+%     IRFamp*heaviside(tc).*(r(8)*exp(-(tc)./r(9))+...
+%     r(10)*exp(-((tc)./(r(11))).^r(12))...
+%     )) - sigint;
+% 
+% % Initial guesses
+% r0 = [basefit,0,2.5,... % basecoefs, IRF center (ps), IRF width (ps)
+%     0.02,1,0.02,10,1,... % amp 1, τ1 (ps), amp 2, τ2 (ps), β (stretch)
+%     ]; 
+% 
+% % Lower and upper bounds
+% lb = [newlbbase,-10,1,... % basecoefs, IRF center (ps), IRF min (ps)
+%     0,0.01,... % amp 1, τ1min (ps)
+%     0,0.01,... % amp 2, τ2min (ps)
+%     1e-2...  % β min
+%     ];
+% ub = [newubbase,20,3,... % basecoefs, IRF center (ps), IRF max (ps)
+%     Inf,100,... % amp 1, τ1max (ps)
+%     Inf,100,... % amp 2, τ2max (ps)
+%     1e2...  % β max
+%     ];
+% 
+% % Run lsqnonlin - minimizes error function by adjusting r
+% options=optimoptions(@lsqnonlin);
+% options.MaxFunctionEvaluations = 1e6; % let the fit run longer
+% options.MaxIterations = 1e6; % let the fit run longer
+% options.FunctionTolerance = 1e-12; % make the fit more accurate
+% options.OptimalityTolerance = 1e-12; % make the fit more accurate
+% options.StepTolerance = 1e-12; % make the fit more precise
+% if troubleshoot == 0
+%     options.Display = 'off'; % silence console output
+% end
+% fitval = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
+% fitvector = fitval(1)+fitval(2)*exp(-fitval(3)*(tint-fitval(4)))+fitval(5)*tint+ ... % baseline
+%     conv(exp(-((tc-fitval(6))./(fitval(7)/(2*sqrt(log(2))))).^2), ...
+%     IRFamp*heaviside(tc).*(fitval(8)*exp(-(tc)./fitval(9))+...
+%     fitval(10)*exp(-((tc)./(fitval(11))).^fitval(12))...
+%     ));
+% 
+% fitval
+% % Trim padded signal to original length
+% tint = tint(1:originallength);
+% sigint = sigint(1:originallength);
+% fitvector = fitvector(1:originallength);
+% 
+% % Calculate residuals and ssresid
+% resid = sigint-fitvector;
+% srr = sigpeak./std(resid(2:end));
+% ssresid = sum(resid.^2); % sum of squares of residuals
+% tss = sum((sigint-mean(sigint)).^2); % total sum of squares
+% r2 = 1-(ssresid/tss); % coefficient of determination (R^2)
+% if r2 < 0 % remove nonsense R^2 values
+%     r2 = 0;
+% end
+% 
+% figure; tiledlayout(3,1); nexttile([2 1]); hold on;
+% plot(tint,sigint,'o','LineWidth',2);
+% plot(tint,fitvector,'-','LineWidth',2);
+% ylabel('Signal (AU)');
+% hold off; nexttile([1 1]); hold on;
+% plot(tint,resid);
+% xlabel('Time (ps)'); ylabel('Residuals (AU)')
+
 %% Post-batch analysis
 % -Master array is 4D (x,y,ii,jj); ii,jj are folder,file
 % x = rows (individual t points); y = columns
@@ -1489,6 +1605,7 @@ end
 clc; close all;
 clearvars -except targetfolders maste* ind*
 figvis = 'on';
+savecontours = 0; % 1 = save contours, 0 = not
 
 % Default contour code
 subset = targetfolders;
@@ -1497,8 +1614,9 @@ subset = targetfolders;
 time = NaN(length(subset),max(master(indrtlist,indcvalue,:,:),[],"all"));
 timealign = NaN(length(subset),max(master(indralignlength,indcvalue,:,:),[],"all"));
 prb = NaN(max(master(indrnfiles,indcvalue,:,:),[],"all"),length(subset));
-wIR = prb; lt1 = prb; lt2 = prb; ltr = prb;
+wIR = prb; lt1 = prb; lt2 = prb; ltr = prb; pkht = prb; pulsewidth = prb;
 csig = NaN(height(wIR),width(time),length(subset));
+rawsig = csig;
 csiga = NaN(height(prb),width(timealign),length(subset));
 
 % Pulling data
@@ -1514,8 +1632,13 @@ for i=1:length(subset)
     lt2(1:nfiles,i) = squeeze(master(indrlifetime2,indcvalue,subset(i),1:nfiles));
     ltr(1:nfiles,i) = squeeze(master(indrlt1lt2,indcvalue,subset(i),1:nfiles));
     csig(1:nfiles,1:tlength,i) = squeeze(master(1:tlength,indccorrsig,subset(i),1:nfiles)).';
+    rawsig(1:nfiles,1:tlength,i) = squeeze(master(1:tlength,indcrawsig,subset(i),1:nfiles)).';
     csiga(1:nfiles,1:alength,i) = squeeze(master(1:alength,indcsigalign,subset(i),1:nfiles)).';
+    pkht(1:nfiles,i) = squeeze(master(indrsigpeak,indcvalue,subset(i),1:nfiles));
+    pulsewidth(1:nfiles,i) = squeeze(master(indrpulsewidth,indcvalue,subset(i),1:nfiles));
 end
+
+ltavg = (ltr.*lt1+lt2)./(ltr+1);
 
 % Plotting
 for i=1:length(subset)
@@ -1531,6 +1654,7 @@ for i=1:length(subset)
         % Purple-white-green gradient for contour map
         startcolor = [0.5 0 0.5]; % purple
         endcolor = [0.2 0.8 0.2]; % green
+        %contourlines = [min(sigmatrix,[],"all") 0 logspace(log10(min(abs(sigmatrix),[],"all")),log10(0.3*max(abs(sigmatrix),[],"all")),10) linspace(0.35*max(abs(sigmatrix),[],"all"),max(abs(sigmatrix),[],"all"),5)];
     else % probe sweep
         xstring = 'Compensated time delay (ps)';
         ystring = 'λ_{probe} (nm)';
@@ -1543,6 +1667,7 @@ for i=1:length(subset)
         % Blue-white-orange gradient for contour map
         startcolor = [0 0 1]; % blue
         endcolor = [1 0.5 0]; % orange
+        %contourlines = linspace(min(sigmatrix,[],"all"),max(sigmatrix,[],"all"),20);
     end
 
     if length(rmmissing(w1)) > 1
@@ -1560,7 +1685,7 @@ for i=1:length(subset)
         map = [map1.' map2.' map3.'];
 
         % Plotting
-        figure('visible',figvis);
+        contour = figure('visible',figvis);
         tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
         %tiledlayout(3,6,'TileSpacing','compact','Padding','compact');
 
@@ -1591,48 +1716,57 @@ for i=1:length(subset)
         plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2); xlabel('Peak (AU)');
         %plot(sum(sigmatrix(:,1:length(rmmissing(t1))),2)/length(rmmissing(t1)),w1,'Color',endcolor,'LineWidth',2); xlabel('Mean (AU)');
         ylim([min(w1) max(w1)]); ylabel(ystring);
+        if savecontours == 1
+            saveas(contour,'Probe contours/'+nonswept+'_sweep.png')
+        end
     end
 end
 
-% % Default lifetime comparison
-% ltlegend = strings(length(subset),1);
-% figure('visible',figvis);
-% tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
-% % τ1
-% nexttile([1 2]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(sumfreq,lt1(:,i),'Color',linecolor,'LineWidth',2);
-%     ltlegend(i) = string(wIR(1,i))+' cm{-1}';
-% end
-% xticks([]); ylabel('τ_{1} (ps)');
-% hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 6]); legend(ltlegend);
-% % τ2
-% nexttile([1 2]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(sumfreq,lt2(:,i),'Color',linecolor,'LineWidth',2);
-% end
-% xlabel('(ω_{IR}+ω_{probe})/2πc (cm^{-1})'); ylabel('τ_{2} (ps)');
-% hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 20]); legend(ltlegend);
-% % A1/A2
-% nexttile([2 1]); hold on;
-% for i=1:length(subset)
-%     redamt = exp((i-length(subset))*2/length(subset));
-%     greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-%     blueamt = exp(-2*i/length(subset));
-%     linecolor = [redamt greenamt blueamt];
-%     plot(sumfreq,ltr(:,i),'Color',linecolor,'LineWidth',2);
-% end
-% set(gca,'Yscale','log');
-% xlabel('(ω_{IR}+ω_{probe})/2πc (cm^{-1})'); ylabel('A_{1}/A_{2}');
-% xlim([min(sumfreq) max(sumfreq)]); ylim([0.1 10]); legend(ltlegend);
+% Default lifetime comparison
+ltlegend = strings(length(subset),1);
+figure('visible',figvis);
+tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+% τ1
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(sumfreq,lt1(:,i),'Color',linecolor,'LineWidth',2);
+    ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+end
+xticks([]); ylabel('τ_{1} (ps)');
+hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 5]); 
+%xlim([13695 14747]); 
+legend(ltlegend);
+% τ2
+nexttile([1 2]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(sumfreq,lt2(:,i),'Color',linecolor,'LineWidth',2);
+end
+xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('τ_{2} (ps)');
+hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 10]); 
+%xlim([13695 14747]); ylim([5 8]);
+legend(ltlegend);
+% A1/A2
+nexttile([2 1]); hold on;
+for i=1:length(subset)
+    redamt = exp((i-length(subset))*2/length(subset));
+    greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
+    blueamt = exp(-2*i/length(subset));
+    linecolor = [redamt greenamt blueamt];
+    plot(sumfreq,ltr(:,i),'Color',linecolor,'LineWidth',2);
+end
+set(gca,'Yscale','log');
+xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+xlim([min(sumfreq) max(sumfreq)]); ylim([1e-2 1e2]); 
+%xlim([13695 14747]); ylim([1e-2 1e2]); 
+legend(ltlegend);
 
 
 %% Functions
