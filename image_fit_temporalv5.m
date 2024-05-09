@@ -3,18 +3,20 @@
 %%% v2 - added lifetime parsing logic
 %%% v3 - updated based on fit_temporal_v5
 %%% v4 - updated based on fit_temporal_v6
+%%% v5 - quality of life improvements
+%%% -- replaced by fit_temporalv8
 
 clear; clc; close all; warning off;
 % Load data
 x = importdata("Tlist.txt");
-data = double(tiffreadVolume("FOV1_64X64_Idler2159.9_DFG5377.6_P0.0657_CH2.tif"));
+data = double(tiffreadVolume("FOV1_BF_50X41_Idler2228.1_DFG5241.3_P0.1368_CH2.tif"));
 imagesize = size(data); % x by y by z -- x by y images, z is temporal
 
 % Image to save to
-tiffname = 'biexp_lifetimes_FOV1.tif';
+tiffname = 'exp_lifetimes_FOV1.tif';
 
 % Test-run on subset of image
-testsubset = 1; % 1 = do a test run, 0 = full processing
+testsubset = 0; % 1 = do a test run, 0 = full processing
 subsize = 2; % size of subset for test run
 
 if testsubset == 1
@@ -234,6 +236,7 @@ else
 end
 
 %% Save data manually
+%lifetime1 = lifetime1./2;
 Save_tiff(tiffname,lifetime1,lifetime2,ssresid,FWHM,r2)
 
 %% Inspecting problematic fits
