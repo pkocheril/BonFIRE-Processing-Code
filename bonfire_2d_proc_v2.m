@@ -1,37 +1,18 @@
 %% Batch processing of 2DVF spectra and BonFIRE images 
-%%% initially written from sweep_proc_align_v14
-% Changelog
-%%% embedded values for PMT gain correction, Pellicle beamsplitter
-% power correction, and objective transmission correction
-%%% speed improvements (smarter conditional logic, fewer loops, fit
-% constraints updating by SNR)
-%%% switched to "current vs set" for values - let vary per-folder
-%%% added snrv2 (using stdev of baseline)
-%%% updated variable names (more descriptive)
-%%% switched from hard-coded analysis/plotting to modular functions
-%%% added CH3, CH4, and SPCM simultaneous processing
-%%% replaced "pairedDCAC" with "channels"
-%%% added "fitchannels" to let user select channels to fit
-%%% added image preview and ROI selection for image test runs
-%%% changed filetype assignment to be per file (by filename)
-%%% added lifetime image writeout (pngs)
-%%% made infofile finding smarter (search by filename)
-%%% replaced master array with summary structure with all values
-%%% added idler tuning rate (6.9 fs/cm-1 for CH-stretching region)
-%%% integrated pairwise comparisons testing
-
+%%% v2 - improved auto-lifetime fit selection
+%%% v3 - bug fixes
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_03_12/'
+cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_07_02_PK/'
 clear; clc; close all;
 
 % Main configuration options
-loadprevious = []; % [] = auto-detect, 0 = new analysis, 
+loadprevious = 0; % [] = auto-detect, 0 = new analysis, 
 % 1 = load individual .dats, 2 = read structure.xml
 runtype = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
-targetfolders = 1:8; % indices of folders to process, [] = dialog
-t0pos = []; % specify t0 position (mm), [] = autofind
+targetfolders = []; % indices of folders to process, [] = dialog
+t0pos = 290.4; % specify t0 position (mm), [] = autofind
 
 % Additional configuration options
 ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
@@ -41,7 +22,7 @@ basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear,
 fitchannels = 2; % specify data channels to fit, [] = dialog
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
-powernormtype = 0; % 0 = no normalization, 1 = normalize by IR power,
+powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 floatbase = 0.1; % fraction to float baseline coeffs (0.1 -> +/- 10%)
@@ -50,7 +31,7 @@ cuthigh = 0.8; % upper baseline fit cutoff, (default 80th %ile)
 verbose = 2; % 2 = all info on figure, 1 = regular figure annotation, 
 % 0 = no figure annotation
 showprogress = 1; % show progress as fitting proceeds over pixels in image
-snrcutoff = 0; % SNR minimum for lifetime image fitting (0 to fit everything)
+snrcutoff = -Inf; % SNR minimum for lifetime image fitting (-Inf = fit all)
 troubleshoot = 0; % 0 = default, 1 = show everything along the way
 
 % Even more configuration options (largely obsolete)
@@ -307,7 +288,11 @@ if loadprevious == 0 % run new analysis
                         filebase = strjoin(fileinfo(1:end-5),'_');
                     else
                         IRpower = 0; DFGWN = 0; idlerWN = 0;
-                        filebase = strjoin(fileinfo(1:end-(numel(fileinfo)-1)),'_');
+                        if numel(fileinfo) == 4
+                            filebase = strjoin(fileinfo(1:end-(numel(fileinfo)-2)),'_');
+                        else
+                            filebase = strjoin(fileinfo(1:end-(numel(fileinfo)-1)),'_');
+                        end
                     end
                 end
                 if infofound == 1 % parse info from .txt files
@@ -384,6 +369,10 @@ if loadprevious == 0 % run new analysis
                             levanteFWHM = infofile(33);
                         end
                     else % if not extended info
+                        pmtgain = 1; pmtBW = 1; modfreq = 0; pinholeyn = 0;
+                        prbdichroic = 0; pmtcmosmirror = 0; pmtfilter = 0;
+                        spcmfilter = 0; cmosfilter = 0; dutycycle = 0;
+                        probeFWHM = 0; levanteFWHM = 0;
                         if verbose == 2
                             verbose = 1; % can't print out experimental parameters
                         end
@@ -594,12 +583,12 @@ if loadprevious == 0 % run new analysis
                             [tint,sigint,fitvector,tfit,fitcurve,fitval,...
                                 lifetime1,lifetime2,a1a2,fwhm,r2,resid,srr,fftx,ffty,currltfittype] = ...
                                 ltfitfn(t,signal,currltfittype,peaksign,sigpeak,snr,...
-                                currpulsewidth,ltmin,ltmax,basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                currpulsewidth,ltmin,ltmax,basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                         else % don't do lifetime fitting
                             [tint,sigint,fitvector,tfit,fitcurve,fitval,...
                                 lifetime1,lifetime2,a1a2,fwhm,r2,resid,srr,fftx,ffty,~] = ...
                                 ltfitfn(t,signal,0,peaksign,sigpeak,snr,...
-                                currpulsewidth,ltmin,ltmax,basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                currpulsewidth,ltmin,ltmax,basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                         end
 
                         % Process CH1
@@ -630,12 +619,12 @@ if loadprevious == 0 % run new analysis
                                 [tint,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
                                     ch1lifetime1,ch1lifetime2,ch1a1a2,ch1fwhm,ch1r2,ch1resid,ch1srr,ch1fftx,ch1ffty,currltfittype] = ...
                                     ltfitfn(t,ch1,currltfittype,ch1peaksign,ch1peak,ch1snr,...
-                                    currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
                                 [tint,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
                                     ch1lifetime1,ch1lifetime2,ch1a1a2,ch1fwhm,ch1r2,ch1resid,ch1srr,ch1fftx,ch1ffty,~] = ...
                                     ltfitfn(t,ch1,0,ch1peaksign,ch1peak,ch1snr,...
-                                    currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             end
                         end
                         % Process CH3
@@ -666,12 +655,12 @@ if loadprevious == 0 % run new analysis
                                 [tint,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
                                     ch3lifetime1,ch3lifetime2,ch3a1a2,ch3fwhm,ch3r2,ch3resid,ch3srr,ch3fftx,ch3ffty,currltfittype] = ...
                                     ltfitfn(t,ch3,currltfittype,ch3peaksign,ch3peak,ch3snr,...
-                                    currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
                                 [tint,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
                                     ch3lifetime1,ch3lifetime2,ch3a1a2,ch3fwhm,ch3r2,ch3resid,ch3srr,ch3fftx,ch3ffty,~] = ...
                                     ltfitfn(t,ch3,0,ch3peaksign,ch3peak,ch3snr,...
-                                    currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             end
                         end
                         % Process CH4
@@ -702,12 +691,12 @@ if loadprevious == 0 % run new analysis
                                 [tint,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
                                     ch4lifetime1,ch4lifetime2,ch4a1a2,ch4fwhm,ch4r2,ch4resid,ch4srr,ch4fftx,ch4ffty,currltfittype] = ...
                                     ltfitfn(t,ch4,currltfittype,ch4peaksign,ch4peak,ch4snr,...
-                                    currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
                                 [tint,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
                                     ch4lifetime1,ch4lifetime2,ch4a1a2,ch4fwhm,ch4r2,ch4resid,ch4srr,ch4fftx,ch4ffty,~] = ...
                                     ltfitfn(t,ch4,0,ch4peaksign,ch4peak,ch4snr,...
-                                    currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             end
                         end
                         % Process SPCM
@@ -738,12 +727,12 @@ if loadprevious == 0 % run new analysis
                                 [tint,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
                                     spcmlifetime1,spcmlifetime2,spcma1a2,spcmfwhm,spcmr2,spcmresid,spcmsrr,spcmfftx,spcmffty,currltfittype] = ...
                                     ltfitfn(t,spcm,currltfittype,spcmpeaksign,spcmpeak,spcmsnr,...
-                                    currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
                                 [tint,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
                                     spcmlifetime1,spcmlifetime2,spcma1a2,spcmfwhm,spcmr2,spcmresid,spcmsrr,spcmfftx,spcmffty,~] = ...
                                     ltfitfn(t,spcm,0,spcmpeaksign,spcmpeak,spcmsnr,...
-                                    currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,troubleshoot);
+                                    currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             end
                         end
 
@@ -778,7 +767,7 @@ if loadprevious == 0 % run new analysis
                             talign = talign(alignstart:alignend);
                             sigalign = sigalign(alignstart:alignend);
                         else
-                            talign = t; sigalign = signal;
+                            talign = t; sigalign = corrsig;
                         end
                         if IRWN > 2500 && IRWN < 3500 && ~isempty(currt0) % interpolate for tD compensation
                             idlertuningrate = 0.0069; % ps/cm-1
@@ -797,7 +786,7 @@ if loadprevious == 0 % run new analysis
                             talign = talign(alignstart+1:alignend);
                             sigalign = sigalign(alignstart+1:alignend);
                         end
-                        
+
                         if currdatatype == 1 % for images
                             bfarray(pixelrow,pixelcol) = sigpeak;
                             lt1array(pixelrow,pixelcol) = lifetime1;
@@ -1007,7 +996,7 @@ if loadprevious == 0 % run new analysis
                     cs.data.t = t; cs.data.signal = signal; cs.data.tint = tint; cs.data.sigint = sigint;
                     cs.data.rawsig = rawsig; cs.data.corrsig = corrsig; cs.data.talign = talign;
                     cs.data.sigalign = sigalign; cs.data.tbase = tbase; cs.data.sigbase = sigbase;
-                    cs.data.basecurve = basecurve; cs.data.snrsweep = snrsweep;
+                    cs.data.basecurve = basecurve; cs.data.snrsweep = snrsweep; cs.data.delaypos = delaypos;
                     cs.summary.peakheight = sigpeak; cs.summary.peakarea = integsig;
                     cs.summary.snr = snr; cs.summary.snrv2 = snrv2; cs.summary.sbr = sbr;
                     cs.summary.noise = noise; cs.summary.basesd = basesd; cs.summary.nfiles = totalfiles;
@@ -1119,6 +1108,7 @@ else % reload previously processed data
     end
 end
 
+
 %% Post-batch analysis
 % Master array has been replaced by the summary structure! Use the GUI to 
 % inspect its contents and summary.(folder).(file).(value) to pull from it.
@@ -1130,9 +1120,12 @@ clearvars -except targetfolders summary workingdirectory subfolders
 figvis = 'on';
 
 % Analysis options
-analysistype = []; % 0 = nothing, 1 = load data, 2 = contours, 3 = lifetimes, [] = dialog
-subset = []; % [] = dialog, targetfolders = run all
+analysistype = [1 2]; % 0 = nothing, 1 = load data, 2 = contours, 3 = lifetimes, [] = dialog
 savecontours = 0; % 1 = save contours, 0 = not
+xaxischoice = 3; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
+% 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
+logcontour = 0; % 0 = linear scale, 1 = log scale
+subset = [2 3 4 5 6 8 9]; % [] = dialog, targetfolders = run all
 
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
@@ -1143,13 +1136,13 @@ end
 if isempty(subset) % dialog to select folders
     [indx,~] = listdlg('PromptString',{'Select folders to process.'},...
     'SelectionMode','multiple','ListString',subfolders(targetfolders));
-    subset = targetfolders(indx);
+    subset = indx;
 end
 
-if ismember(analysistype,1)
 sf = fieldnames(summary); % summary fields
 maxfiles = 0; maxTlength = 0; maxalignlength = 0;
-    for i=subset
+if ismember(analysistype,1)
+    for i=1:length(subset)
         nfiles = summary.(sf{i}).nfiles;
         if maxfiles < nfiles
             maxfiles = nfiles;
@@ -1171,15 +1164,16 @@ end
 time = NaN(length(subset),maxTlength);
 timealign = NaN(length(subset),maxalignlength);
 prb = NaN(maxfiles,length(subset));
-wIR = prb; lt1 = prb; lt2 = prb; ltr = prb; pkht = prb; pulsewidth = prb;
-IRpowers = prb; prbpowers = prb;
+wIR = prb; lt1 = prb; lt2 = prb; ltr = prb; pulsewidth = prb;
+IRpowers = prb; prbpowers = prb; noise = prb; dcsbr = prb;
+pkht = NaN(maxfiles,length(subset));
 csig = NaN(height(wIR),width(time),length(subset)); rawsig = csig;
 csiga = NaN(height(prb),width(timealign),length(subset));
 
 % Pulling data
-for i=subset
+for i=subset % folder
     nfiles = summary.(sf{i}).nfiles;
-    for j=1:nfiles
+    for j=1:nfiles % file
         tlength = length(summary.(sf{i}).('file'+string(j)).data.t);
         alength = length(summary.(sf{i}).('file'+string(j)).data.talign);
         time(i,1:tlength) = summary.(sf{i}).('file'+string(j)).data.t;
@@ -1196,54 +1190,69 @@ for i=subset
         pulsewidth(j,i) = summary.(sf{i}).('file'+string(j)).fit.pulsewidth;
         IRpowers(j,i) = summary.(sf{i}).('file'+string(j)).parameters.IRpower;
         prbpowers(j,i) = summary.(sf{i}).('file'+string(j)).parameters.prbpower;
+        noise(j,i) = summary.(sf{i}).('file'+string(j)).summary.noise;
+        dcsbr(j,i) = summary.(sf{i}).('file'+string(j)).ch1summary.sbr;
     end
 end
 
+pkht = abs(pkht);
 ltavg = (ltr.*lt1+lt2)./(ltr+1);
+photothermal = squeeze(rawsig(:,end,:));
+defaultfont = 25;
+tD = time(1,:);
 
 if max(ismember(analysistype,2))
     % Plotting contours
     for i=subset
-        if isscalar((unique(rmmissing(prb(:,i))))) % no probe tuning --> IR sweep
+        nfiles = summary.(sf{i}).nfiles;
+        if isscalar((unique(rmmissing(nonzeros(prb(:,i)))))) % no probe tuning --> IR sweep
             xstring = 'Time delay (ps)';
-            ystring = 'ω_{IR}/2πc (cm^{-1})';
-            w1 = wIR(:,i);
-            w2 = prb(:,i);
+            ystring = 'ω_{IR} (cm^{-1})';
+            w1 = wIR(1:nfiles,i);
+            w2 = prb(1:nfiles,i);
             nonswept = string(round(w2(1)))+' nm';
             sumfreq = 1e7./w2+w1;
-            % Purple-white-green gradient for contour map
-            startcolor = [0.5 0 0.5]; % purple
-            endcolor = [0.2 0.8 0.2]; % green
-            %contourlines = [min(sigmatrix,[],"all") 0 logspace(log10(min(abs(sigmatrix),[],"all")),log10(0.3*max(abs(sigmatrix),[],"all")),10) linspace(0.35*max(abs(sigmatrix),[],"all"),max(abs(sigmatrix),[],"all"),5)];
+            % Gradients for contour maps
+            if min(w1) > 2000 % idler sweep
+                startcolor = [0 0.35 0.5]; % turquoise
+                endcolor = [0.8 0.2 0.2]; % red
+            else % DFG sweep
+                startcolor = [0.5 0 0.5]; % purple
+                endcolor = [0.2 0.8 0.2]; % green
+            end
         else % probe sweep
             xstring = 'Compensated time delay (ps)';
             ystring = 'λ_{probe} (nm)';
-            w1 = prb(:,i);
-            w2 = wIR(:,i);
+            w1 = prb(1:nfiles,i);
+            w2 = wIR(1:nfiles,i);
             nonswept = string(round(w2(1)))+' cm^{-1}';
             sumfreq = 1e7./w1+w2;
             % Blue-white-orange gradient for contour map
             startcolor = [0 0 1]; % blue
             endcolor = [1 0.5 0]; % orange
-            %contourlines = linspace(min(sigmatrix,[],"all"),max(sigmatrix,[],"all"),20);
         end
         t1 = timealign(i,:);
         sigmatrix = csiga(:,:,i);
-    
+
         if ismatrix(rmmissing(w1))
             % Auto-sorting
             [t1,tind] = sort(t1);
             [w1,wind] = sort(w1);
             [x1,x2] = meshgrid(t1,w1);
             sigmatrix = sigmatrix(wind,tind);
-            logsigmatrix = log(abs(sigmatrix));
-    
+            if logcontour == 1
+                sigmatrix = log(abs(sigmatrix));
+                contourstring = 'log|Corrected signal| at '+nonswept+' (AU)';
+            else
+                contourstring = 'Corrected signal at '+nonswept+' (AU)';
+            end
+
             % Color mapping
             map1 = [linspace(startcolor(1),1,100) linspace(1,endcolor(1),100)];
             map2 = [linspace(startcolor(2),1,100) linspace(1,endcolor(2),100)];
             map3 = [linspace(startcolor(3),1,100) linspace(1,endcolor(3),100)];
             map = [map1.' map2.' map3.'];
-    
+
             % Plotting
             contour = figure('visible',figvis);
             tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
@@ -1252,20 +1261,20 @@ if max(ismember(analysistype,2))
             %plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2); ylabel('Peak (AU)');
             plot(t1,sum(sigmatrix(1:length(rmmissing(w1)),:)/length(rmmissing(w1)),1),'Color',startcolor,'LineWidth',2); ylabel('Mean (AU)');
             xlim([min(t1) max(t1)]); xlabel(xstring);
-    
+
             % Normal contour
             nexttile([3 3]);
             contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
-            cb.Label.String='Corrected signal at '+nonswept+' (AU)';
+            cb.Label.String=contourstring;
             cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
             xlabel(xstring); ylabel(ystring);
             xlim([min(t1) max(t1)]); ylim([min(w1) max(w1)]);
-    
+
             % Blank square (top-right)
             nexttile([1 1]);
             xticks([]); yticks([]);
             annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
-    
+
             % Frequency 1D cross-section
             nexttile([3 1]);
             plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2); xlabel('Peak (AU)');
@@ -1278,6 +1287,34 @@ if max(ismember(analysistype,2))
     end
 end
 
+% Set up x-axis for lifetime plots
+if xaxischoice == 0
+    xdata = w1;
+    label = 'λ_{probe} (nm)';
+else
+    if xaxischoice == 1
+        xdata = sumfreq;
+        label = 'ω_{IR}+ω_{probe} (cm^{-1})';
+    else % some detuning
+        if xaxischoice == 3
+            detuning = sumfreq-(1e7/696);
+            label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+        else
+            if xaxischoice == 4
+                detuning = sumfreq-(1e7/713);
+                label = 'ω_{IR}+ω_{probe}-ω_{0-0} (cm^{-1})';
+            else % xaxischoice = 2 or other
+                prompt = {'Specify absorption maximum (nm).'};
+                dlgtitle = 'Set up detuning'; dims = [1 45]; definput = {'696'};
+                coordanswer = inputdlg(prompt,dlgtitle,dims,definput);
+                detuning = sumfreq-(1e7/str2double(coordanswer));
+                label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+            end
+        end
+        xdata = detuning;
+    end
+end
+
 if max(ismember(analysistype,3))
     % Default lifetime comparison
     ltlegend = strings(length(subset),1);
@@ -1285,17 +1322,16 @@ if max(ismember(analysistype,3))
     tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
     % τ1
     nexttile([1 2]); hold on;
-    for i=1:length(subset)
+    for i=subset
         redamt = exp((i-length(subset))*2/length(subset));
         greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
         blueamt = exp(-2*i/length(subset));
         linecolor = [redamt greenamt blueamt];
-        plot(sumfreq,lt1(:,subset(i)),'Color',linecolor,'LineWidth',2);
-        ltlegend(i) = string(wIR(1,subset(i)))+' cm{-1}';
+        plot(xdata,lt1(:,i),'Color',linecolor,'LineWidth',2);
+        ltlegend(i) = string(wIR(1,i))+' cm{-1}';
     end
     xticks([]); ylabel('τ_{1} (ps)');
-    hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 5]); 
-    %xlim([13695 14747]); 
+    hold off; xlim([min(xdata) max(xdata)]); ylim([0 5]); 
     legend(ltlegend);
     % τ2
     nexttile([1 2]); hold on;
@@ -1304,11 +1340,10 @@ if max(ismember(analysistype,3))
         greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
         blueamt = exp(-2*i/length(subset));
         linecolor = [redamt greenamt blueamt];
-        plot(sumfreq,lt2(:,subset(i)),'Color',linecolor,'LineWidth',2);
+        plot(xdata,lt2(:,i),'Color',linecolor,'LineWidth',2);
     end
     xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('τ_{2} (ps)');
-    hold off; xlim([min(sumfreq) max(sumfreq)]); ylim([0 10]); 
-    %xlim([13695 14747]); ylim([5 8]);
+    hold off; xlim([min(xdata) max(xdata)]); ylim([0 10]); 
     legend(ltlegend);
     % A1/A2
     nexttile([2 1]); hold on;
@@ -1317,70 +1352,25 @@ if max(ismember(analysistype,3))
         greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
         blueamt = exp(-2*i/length(subset));
         linecolor = [redamt greenamt blueamt];
-        plot(sumfreq,ltr(:,subset(i)),'Color',linecolor,'LineWidth',2);
+        plot(xdata,ltr(:,i),'Color',linecolor,'LineWidth',2);
     end
     set(gca,'Yscale','log');
     xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('A_{1}/A_{2}');
-    xlim([min(sumfreq) max(sumfreq)]); ylim([1e-2 1e2]); 
-    %xlim([13695 14747]); ylim([1e-2 1e2]); 
+    xlim([min(xdata) max(xdata)]); ylim([1e-2 1e2]); 
     legend(ltlegend);
 end
 
 %% Pairwise comparisons
-clear; close all; clc;
-%image1 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV1_BF_50X41_Idler2228.1_DFG5241.3_P0.1368_proc.tif"));
-%image2 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV2_BF_31X39_Idler2228.1_DFG5241.3_P0.1368_proc.tif"));
-cond1 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV1_condens_LT.tif"));
-buff1 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV1_buffer_LT.tif"));
-cond2 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV2_condens_LT.tif"));
-buff2 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV2_buffer_LT.tif"));
+% somehow sort lifetimes into condensate or buffer (by BonFIRE intensity?)
+condensate = [1 2 3]; buffer = [4 5 6];
 
-condensate = [nonzeros(cond1); nonzeros(cond2)];
-buffer = [nonzeros(buff1); nonzeros(buff2)];
-name2 = 'Condensate';
-name1 = 'Buffer';
-testtype = 'mean'; % mean or median
 % Run comparison and make summary plot
 figure;
-[buffermean,condmean,pval,cohend,cohenlower,cohenupper] = ...
-    statcompare(buffer,condensate,name1,name2,testtype);
-bufferstd = std(buffer);
-condstd = std(condensate)./sqrt(length(condensate));
-
-% From trendline in JPCL paper
-condSRF = (condmean-0.58)./-0.045;
-condlower = (condmean-condstd-0.58)./-0.045;
-condupper = (condmean+condstd-0.58)./-0.045;
-condbar = [condlower condSRF condupper];
-srferror = condSRF-condlower;
-
-% SRF calculation from IVR code
-dipolemoment = 5.3383; % D, for SRFs
-refractiveindex = 1.5; % for SRFs
-molecularvolume = 164; % A^3, for SRFs
-c = 299792458;
-% Solvent dielectric constants
-dielec = 2:0.01:3;
-% Calculate SRFs
-dipoleSI = dipolemoment*1e-21/c; % dipole moment in C m
-volumeSI = molecularvolume*1e-30; % molecular volume in m^3
-permit = 8.85418782e-12; % F/m, permittivity of free space
-coulomb = 1/(4*pi*permit); % N m^2 C^-2, Coulomb constant
-srfpart1 = -1*dipoleSI/(volumeSI); %
-srfpart2 = (2/3).*(dielec-1).*(refractiveindex^2+2)./(2.*dielec+refractiveindex^2);
-expfields = srfpart1.*srfpart2*coulomb*1e-8; % MV/cm
-
-% figure; plot(dielec,expfields); % ε_condensate = 2.57 +/- 0.12
-
-
+[condmean,buffermean,pval,cohend,cohenlower,cohenupper] = ...
+    statcompare(condensate,buffer);
 
 %% Lifetime histograms
-figure; hold on; yyaxis left;
-histogram(buffer); xlabel('Lifetime (ps)'); ylabel('Buffer');
-yyaxis right;
-histogram(condensate); ylabel('Condensates');
-xlim([0 3]);
-ax = gca; ax.FontSize = 12;
+
 
 
 %% Functions
@@ -1625,16 +1615,28 @@ end
 
 % Lifetime fitting
 function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,FWHM,R2,RESID,SRR,FFTX,FFTY,CURRLTFITTYPE] = ...
-    ltfitfn(T,SIGNAL,CURRLTFITTYPE,PEAKSIGN,SIGPEAK,SNR,CURRPULSEWIDTH,LTMIN,LTMAX,BASEFIT,CURRBASEFITTYPE,FLOATBASE,IRWNum,TROUBLESHOOT)
+    ltfitfn(T,SIGNAL,CURRLTFITTYPE,PEAKSIGN,SIGPEAK,SNR,CURRPULSEWIDTH,LTMIN,LTMAX,BASEFIT,CURRBASEFITTYPE,FLOATBASE,IRWNum,PROBE,TROUBLESHOOT)
 %%% This function is performs lifetime fitting (convolution of Gaussian
 % with vibrational decay) on an input signal vector for a given time
 % vector. It can guess what type of fit to use based on frequency.
 
     if isempty(CURRLTFITTYPE) % auto-choose lifetime fitting
-        if IRWNum > 1680 && IRWNum < 2400 % triple bond or carbonyl
-            CURRLTFITTYPE = 1; % single exponential
-        else
-            CURRLTFITTYPE = 2; % biexponential
+        if IRWNum > 1680 && IRWNum < 1800 % carbonyl
+            CURRLTFITTYPE = 1; % monoexponential
+        else % not carbonyl
+            if IRWNum < 2400 && IRWNum > 2000 % triple bond
+                if PROBE < 520
+                    CURRLTFITTYPE = 2; % biexponential (Coumarin 337 nitrile)
+                else
+                    CURRLTFITTYPE = 1; % monoexponential (normal)
+                end
+            else % double bond or CH
+                if (IRWNum == 1300 || IRWNum == 1500 || IRWNum == 1590) && PROBE < 770
+                    CURRLTFITTYPE = 4; % stretched/compressed biexponential
+                else
+                    CURRLTFITTYPE = 2; % biexponential
+                end
+            end
         end
     end
     % Lifetime fitting
@@ -1739,12 +1741,18 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
         end
         % Run lsqnonlin - minimizes error function by adjusting r
         options=optimoptions(@lsqnonlin);
-        if SNR > 30 % let run longer for high-SNR
+        if SNR > 10 % let run longer for high-SNR
             options.MaxFunctionEvaluations = 1e6; % let the fit run longer
             options.MaxIterations = 1e6; % let the fit run longer
             options.FunctionTolerance = 1e-12; % make the fit more accurate
             options.OptimalityTolerance = 1e-12; % make the fit more accurate
             options.StepTolerance = 1e-12; % make the fit more precise
+        else
+            options.MaxFunctionEvaluations = 1e5; % let the fit run longer
+            options.MaxIterations = 1e5; % let the fit run longer
+            options.FunctionTolerance = 1e-10; % make the fit more accurate
+            options.OptimalityTolerance = 1e-10; % make the fit more accurate
+            options.StepTolerance = 1e-10; % make the fit more precise
         end
         if TROUBLESHOOT == 0
             options.Display = 'off'; % silence console output
@@ -1781,6 +1789,10 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
         if CURRLTFITTYPE == 3 % Gauss*stretchexp
             LIFETIME1 = FITVAL(11); LIFETIME2 = 0;
             LT1LT2 = FITVAL(12); % stretching factor
+        end
+        if CURRLTFITTYPE == 4 % Gauss*strbiexp
+            LIFETIME1 = FITVAL(9); LIFETIME2 = FITVAL(11);
+            LT1LT2 = FITVAL(8)/FITVAL(10);
         end
         % Calculate residuals and ssresid
         RESID = SIGINT-FITVECTOR;
@@ -1886,22 +1898,10 @@ function makeimagepanel(array,XSTEPS,YSTEPS,cblabel)
 end
 
 % Pairwise statistical comparisons
-function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,group2,NAME1,NAME2,TESTTYPE)
+function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,group2)
 % This function performs statistical testing to compare two groups
 % (unpaired).
-    if contains(TESTTYPE,"median")
-        TEST = "mediandiff";
-        YSTRING = "Median difference";
-    else
-        TEST = "cohen";
-        YSTRING = "Cohen's d";
-    end
-    if isempty(NAME1)
-        NAME1 = 'Group 1';
-    end
-    if isempty(NAME2)
-        NAME2 = 'Group 2';
-    end
+    
     % Ensure column vectors
     if length(group1) == width(group1)
         group1 = group1.';
@@ -1921,7 +1921,7 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     g1mean = stats.means(1);
     g2mean = stats.means(2);
     % Effect size
-    effsize = meanEffectSize(group1,group2,Effect=TEST,...
+    effsize = meanEffectSize(group1,group2,Effect="cohen",...
         ConfidenceIntervalType="bootstrap", BootstrapOptions=statset...
         (UseParallel=true),NumBootstraps=3000);
     effsizearray = table2array(effsize);
@@ -1929,16 +1929,16 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     COHENLOWER = effsizearray(2);
     COHENUPPER = effsizearray(3);
     ann(1) = {"p = "+string(PVAL)};
-    ann(2) = {YSTRING+" = "+string(COHEND)+" ["+string(COHENLOWER)+...
+    ann(2) = {"Cohen's d = "+string(COHEND)+" ["+string(COHENLOWER)+...
         ", "+string(COHENUPPER)+"]"};
 
-    gardnerAltmanPlot(group1,group2,Effect=TEST,...
+    gardnerAltmanPlot(group1,group2,Effect="cohen",...
     ConfidenceIntervalType="bootstrap", ...
     BootstrapOptions=statset(UseParallel=true),NumBootstraps=3000);
-    xticklabels({NAME1,NAME2,'Effect size'})
+    xticklabels({'Cytoplasm','Nucleoplasm','Effect size'})
     yyaxis left; ylabel('Lifetime (ps)'); 
-    yyaxis right; ylabel(YSTRING);
-    annotation('textbox',[0.4 0.7 0.2 0.2],'String',ann,...
+    yyaxis right; ylabel("Cohen's d");
+    annotation('textbox',[0.5 0.7 0.2 0.2],'String',ann,...
         'FitBoxToText','on','FontSize',12,'EdgeColor',[1 1 1]);
     title('')
     ax = gca; ax.FontSize = 12;
