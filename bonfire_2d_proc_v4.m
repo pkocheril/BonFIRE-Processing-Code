@@ -1,9 +1,10 @@
 %% Batch processing of 2DVF spectra and BonFIRE images 
 %%% v2 - improved auto-lifetime fit selection
 %%% v3 - bug fixes
+%%% v4 - peak fitting in post-batch analysis
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/Wei Lab/Data/2024_07_02_PK/'
+%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_07_18_PK/'
 clear; clc; close all;
 
 % Main configuration options
@@ -22,7 +23,7 @@ basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear,
 fitchannels = 2; % specify data channels to fit, [] = dialog
 writeprocyn = 1; % 1 = write batch processed files, 0 = not
 writefigsyn = 1; % 1 = write figure files, 0 = not
-powernormtype = 0; % 0 = no normalization, 1 = normalize by IR power,
+powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 floatbase = 0.1; % fraction to float baseline coeffs (0.1 -> +/- 10%)
@@ -1120,16 +1121,19 @@ clearvars -except targetfolders summary workingdirectory subfolders
 figvis = 'on';
 
 % Analysis options
-analysistype = [1 2]; % 0 = nothing, 1 = load data, 2 = contours, 3 = lifetimes, [] = dialog
+analysistype = []; % 0 = nothing, 1 = load data, 2 = contours, 
+% 3 = lifetimes, 4 = peak fitting, 5 = peak overlay, [] = dialog
 savecontours = 0; % 1 = save contours, 0 = not
 xaxischoice = 3; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 % 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
 logcontour = 0; % 0 = linear scale, 1 = log scale
-subset = [2 3 4 5 6 8 9]; % [] = dialog, targetfolders = run all
+subset = []; % [] = dialog, targetfolders = run all
+plotfits = 0; % 1 = show individual peak fits, else don't
 
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
-    'SelectionMode','multiple','ListString',{'Load data','Contour maps','Lifetime comparisons'});
+    'SelectionMode','multiple','ListString',{'Load data','Contour maps',...
+    'Lifetime comparisons','Peak fitting','Peak overlay'});
     analysistype = indx;
 end
 
@@ -1138,6 +1142,29 @@ if isempty(subset) % dialog to select folders
     'SelectionMode','multiple','ListString',subfolders(targetfolders));
     subset = indx;
 end
+
+% Color selection
+colorset(1,:) = [0 0.35 0.5]; % turquoise
+colorset(2,:) = [0.8 0.2 0.2]; % red
+colorset(3,:) = [0.1 0.7 0.5]; % seafoam green
+colorset(4,:) = [0.8 0.1 0.6]; % pink
+colorset(5,:) = [1 0.5 0.2]; % orange
+colorset(6,:) = [0.2 0.8 0.8]; % light blue
+colorset(7,:) = [0.8 0.8 0.2]; % yellow
+colorset(8,:) = [0.15 0.6 1]; % moderate blue
+colorset(9,:) = [0.2 0.8 0.2]; % green
+colorset(10,:) = [0.1 0.4 0.8]; % blue
+colorset(11,:) = [1 0.35 0.35]; % salmon
+colorset(12,:) = [0.5 0.5 1]; % lavender
+colorset(13,:) = [0.8 0.2 0.8]; % magenta
+colorset(14,:) = [0.8 0.6 0.1]; % yellow-orange
+colorset(15,:) = [0.2 0.2 0.8]; % indigo
+colorset(16,:) = [0.6 0.8 0.1]; % yellow-green
+colorset(17,:) = [0.6 0.1 0.8]; % purple
+colorset(18,:) = [0.5 0.8 0.5]; % pale green
+colorset(19,:) = [0 0 1]; % dark blue
+colorset(20,:) = [0.5 0 0.5]; % violet
+colorset(21,:) = [0.3 0 0.3]; % dark purple
 
 sf = fieldnames(summary); % summary fields
 maxfiles = 0; maxTlength = 0; maxalignlength = 0;
@@ -1234,7 +1261,7 @@ if max(ismember(analysistype,2))
         t1 = timealign(i,:);
         sigmatrix = csiga(:,:,i);
 
-        if ismatrix(rmmissing(w1))
+        if length(rmmissing(w1)) > 1
             % Auto-sorting
             [t1,tind] = sort(t1);
             [w1,wind] = sort(w1);
@@ -1287,35 +1314,34 @@ if max(ismember(analysistype,2))
     end
 end
 
-% Set up x-axis for lifetime plots
-if xaxischoice == 0
-    xdata = w1;
-    label = 'λ_{probe} (nm)';
-else
-    if xaxischoice == 1
-        xdata = sumfreq;
-        label = 'ω_{IR}+ω_{probe} (cm^{-1})';
-    else % some detuning
-        if xaxischoice == 3
-            detuning = sumfreq-(1e7/696);
-            label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
-        else
-            if xaxischoice == 4
-                detuning = sumfreq-(1e7/713);
-                label = 'ω_{IR}+ω_{probe}-ω_{0-0} (cm^{-1})';
-            else % xaxischoice = 2 or other
-                prompt = {'Specify absorption maximum (nm).'};
-                dlgtitle = 'Set up detuning'; dims = [1 45]; definput = {'696'};
-                coordanswer = inputdlg(prompt,dlgtitle,dims,definput);
-                detuning = sumfreq-(1e7/str2double(coordanswer));
-                label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
-            end
-        end
-        xdata = detuning;
-    end
-end
-
 if max(ismember(analysistype,3))
+    % Set up x-axis for lifetime plots
+    if xaxischoice == 0
+        xdata = w1;
+        label = 'λ_{probe} (nm)';
+    else
+        if xaxischoice == 1
+            xdata = sumfreq;
+            label = 'ω_{IR}+ω_{probe} (cm^{-1})';
+        else % some detuning
+            if xaxischoice == 3
+                detuning = sumfreq-(1e7/696);
+                label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+            else
+                if xaxischoice == 4
+                    detuning = sumfreq-(1e7/713);
+                    label = 'ω_{IR}+ω_{probe}-ω_{0-0} (cm^{-1})';
+                else % xaxischoice = 2 or other
+                    prompt = {'Specify absorption maximum (nm).'};
+                    dlgtitle = 'Set up detuning'; dims = [1 45]; definput = {'696'};
+                    coordanswer = inputdlg(prompt,dlgtitle,dims,definput);
+                    detuning = sumfreq-(1e7/str2double(coordanswer));
+                    label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+                end
+            end
+            xdata = detuning;
+        end
+    end
     % Default lifetime comparison
     ltlegend = strings(length(subset),1);
     figure('visible',figvis);
@@ -1360,18 +1386,170 @@ if max(ismember(analysistype,3))
     legend(ltlegend);
 end
 
+peakfits.title = 'All fits';
+if max(ismember(analysistype,4))
+    % Peak fitting - Gauss2 for probe, Gauss+line for IR
+    for i=subset
+        nfiles = summary.(sf{i}).nfiles;
+        sigmatrix = csig(1:nfiles,:,i);
+        if isscalar((unique(rmmissing(nonzeros(prb(:,i)))))) % no probe tuning --> IR sweep
+            xstring = 'ω_{IR} (cm^{-1})';
+            w1 = wIR(1:nfiles,i);
+            w2 = prb(1:nfiles,i);
+            nonswept = string(round(w2(1)))+' nm';
+            sumfreq = 1e7./w2+w1;
+            % Color setup
+            if min(w1) > 2000 % idler sweep
+                startcolor = [0 0.35 0.5]; % turquoise
+                endcolor = [0.8 0.2 0.2]; % red
+            else % DFG sweep
+                startcolor = [0.5 0 0.5]; % purple
+                endcolor = [0.2 0.8 0.2]; % green
+            end
+            % Sorting
+            t1 = time(i,:);
+            [t1,tind] = sort(t1);
+            [w1,wind] = sort(w1);
+            sigmatrix = sigmatrix(wind,tind);
+            % Fitting
+            xval = w1; yval = max(sigmatrix,[],2); yval = yval./max(yval);
+            gx = round(min(xval)):0.5:round(max(xval)); gx = gx.';
+            % Gauss + quadratic fit
+            fn = @(x) x(1)+x(2)*xval+x(3)*xval.^2+x(4).*exp(-x(5).*(xval-x(6)).^2)-yval;
+            opt=optimoptions(@lsqnonlin);
+            opt.Display = 'off'; % silence console output
+            soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.005 mean(w1)],...
+                [-Inf -Inf 0 -Inf -Inf 800], ...
+                [Inf Inf 0 Inf Inf 5000],opt);
+            gy = soln(1)+soln(2)*gx+soln(3)*gx.^2+soln(4).*exp(-soln(5).*(gx-soln(6)).^2);
+            peakfits.('folder'+string(i)).center = soln(6);
+            peakfits.('folder'+string(i)).fitvector = soln;
+            peakfits.('folder'+string(i)).amp = 1;
+        else % probe sweep
+            xstring = 'ω_{probe} (cm^{-1})';
+            w1 = 1e7./prb(1:nfiles,i);
+            w2 = wIR(1:nfiles,i);
+            nonswept = string(round(w2(1)))+' cm^{-1}';
+            sumfreq = w1+w2;
+            % Color setup
+            startcolor = [0 0 1]; % blue
+            endcolor = [1 0.5 0]; % orange
+            % Sorting
+            t1 = time(i,:);
+            [t1,tind] = sort(t1);
+            [w1,wind] = sort(w1);
+            sigmatrix = sigmatrix(wind,tind);
+            % Fitting
+            xval = w1; yval = max(sigmatrix,[],2);
+            if width(xval) == length(xval)
+                xval = xval.'; % make column vector
+            end
+            if width(yval) == length(yval)
+                yval = yval.'; % make column vector
+            end
+            gfit = fit(xval,yval,'gauss2');
+            gx = min(xval):2:max(xval); gx = gx.';
+            gy = gfit.a1*exp(-((gx-gfit.b1)/gfit.c1).^2) + gfit.a2*exp(-((gx-gfit.b2)/gfit.c2).^2);
+            gv = gy;
+            peakfits.('folder'+string(i)).center = gfit.b1;
+            peakfits.('folder'+string(i)).center2 = gfit.b2;
+            peakfits.('folder'+string(i)).amp = gfit.a1;
+            peakfits.('folder'+string(i)).amp2 = gfit.a2;
+            peakfits.('folder'+string(i)).width = gfit.c1;
+            peakfits.('folder'+string(i)).width2 = gfit.c2;
+        end
+        if plotfits == 1
+            figure; hold on;
+            plot(xval,yval,'.','MarkerSize',20,'Color',startcolor);
+            plot(gx,gy,'LineWidth',3,'Color',endcolor);
+            plot(gx,gv,'--','LineWidth',3,'Color',startcolor);
+            xlabel(xstring); ylabel('Relative peak (AU)');
+            xlim([min(w1) max(w1)]);
+            ax = gca; ax.FontSize = 12;
+        end
+        peakfits.('folder'+string(i)).foldername = string(subfolders(i));
+        peakfits.('folder'+string(i)).xval = xval;
+        peakfits.('folder'+string(i)).yval = yval;
+        peakfits.('folder'+string(i)).xfit = gx;
+        peakfits.('folder'+string(i)).yfit = gy;
+        peakfits.('folder'+string(i)).xstring = xstring;
+    end
+end
+
+if max(ismember(analysistype,5))
+    % Peak overlay
+    [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
+    'SelectionMode','multiple','ListString',subfolders(targetfolders));
+    overleg = strings(length(overset),1);
+    % Overlay figure
+    figure; hold on;
+    % minx = 1e6; maxx = 0;
+    for j=1:length(overset)
+        i = overset(j);
+        if length(overset) <= height(colorset)
+            linecolor = colorset(j,:);
+        else
+            redamt = exp((j-length(overset))*2/length(overset));
+            greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
+            blueamt = exp(-2*j/length(overset));
+            linecolor = [redamt greenamt blueamt];
+        end
+        xval = peakfits.('folder'+string(i)).xval;
+        yval = peakfits.('folder'+string(i)).yval;
+        yval = yval./peakfits.('folder'+string(i)).amp;
+        plot(xval,yval,'.','MarkerSize',20,'Color',linecolor);
+        overleg(j) = {peakfits.('folder'+string(i)).foldername};
+        % if min(xval) < minx
+        %     minx = min(xval);
+        % end
+        % if max(xval) > maxx
+        %     maxx = max(xval);
+        % end
+    end
+    xlabel(peakfits.('folder'+string(i)).xstring); ylabel('Normalized peak (AU)');
+    %xlim([minx maxx]);
+    legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
+    ax = gca; ax.FontSize = 15;
+    for j=1:length(overset) % plot fits
+        i = overset(j);
+        if length(overset) <= height(colorset)
+            linecolor = colorset(j,:);
+        else
+            redamt = exp((j-length(overset))*2/length(overset));
+            greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
+            blueamt = exp(-2*j/length(overset));
+            linecolor = [redamt greenamt blueamt];
+        end
+        gx = peakfits.('folder'+string(i)).xfit;
+        gy = peakfits.('folder'+string(i)).yfit;
+        gy = gy./peakfits.('folder'+string(i)).amp;
+        plot(gx,gy,'LineWidth',3,'Color',linecolor);
+    end
+end
+
+
 %% Pairwise comparisons
-% somehow sort lifetimes into condensate or buffer (by BonFIRE intensity?)
-condensate = [1 2 3]; buffer = [4 5 6];
-
-% Run comparison and make summary plot
-figure;
-[condmean,buffermean,pval,cohend,cohenlower,cohenupper] = ...
-    statcompare(condensate,buffer);
-
-%% Lifetime histograms
-
-
+statcomparison = 0;
+if statcomparison == 1
+    clear; close all; clc;
+    % Load lifetime images (pre-masked)
+    cond1 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV1_condens_LT.tif"));
+    buff1 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV1_buffer_LT.tif"));
+    cond2 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV2_condens_LT.tif"));
+    buff2 = double(tiffreadVolume("03. 80 uM Rh800 LLPS/FOV2_buffer_LT.tif"));
+    
+    condensate = [nonzeros(cond1); nonzeros(cond2)];
+    buffer = [nonzeros(buff1); nonzeros(buff2)];
+    name2 = 'Condensate';
+    name1 = 'Buffer';
+    testtype = 'mean'; % mean or median
+    % Run comparison and make summary plot
+    figure;
+    [buffermean,condmean,pval,cohend,cohenlower,cohenupper] = ...
+        statcompare(buffer,condensate,name1,name2,testtype);
+    bufferstd = std(buffer);
+    condstd = std(condensate);
+end
 
 %% Functions
 % Most of the data processing has now been moved to dedicated functions.
@@ -1899,10 +2077,22 @@ function makeimagepanel(array,XSTEPS,YSTEPS,cblabel)
 end
 
 % Pairwise statistical comparisons
-function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,group2)
+function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,group2,NAME1,NAME2,TESTTYPE)
 % This function performs statistical testing to compare two groups
 % (unpaired).
-    
+    if contains(TESTTYPE,"median")
+        TEST = "mediandiff";
+        YSTRING = "Median difference";
+    else
+        TEST = "cohen";
+        YSTRING = "Cohen's d";
+    end
+    if isempty(NAME1)
+        NAME1 = 'Group 1';
+    end
+    if isempty(NAME2)
+        NAME2 = 'Group 2';
+    end
     % Ensure column vectors
     if length(group1) == width(group1)
         group1 = group1.';
@@ -1922,7 +2112,7 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     g1mean = stats.means(1);
     g2mean = stats.means(2);
     % Effect size
-    effsize = meanEffectSize(group1,group2,Effect="cohen",...
+    effsize = meanEffectSize(group1,group2,Effect=TEST,...
         ConfidenceIntervalType="bootstrap", BootstrapOptions=statset...
         (UseParallel=true),NumBootstraps=3000);
     effsizearray = table2array(effsize);
@@ -1930,16 +2120,16 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     COHENLOWER = effsizearray(2);
     COHENUPPER = effsizearray(3);
     ann(1) = {"p = "+string(PVAL)};
-    ann(2) = {"Cohen's d = "+string(COHEND)+" ["+string(COHENLOWER)+...
+    ann(2) = {YSTRING+" = "+string(COHEND)+" ["+string(COHENLOWER)+...
         ", "+string(COHENUPPER)+"]"};
 
-    gardnerAltmanPlot(group1,group2,Effect="cohen",...
+    gardnerAltmanPlot(group1,group2,Effect=TEST,...
     ConfidenceIntervalType="bootstrap", ...
     BootstrapOptions=statset(UseParallel=true),NumBootstraps=3000);
-    xticklabels({'Cytoplasm','Nucleoplasm','Effect size'})
+    xticklabels({NAME1,NAME2,'Effect size'})
     yyaxis left; ylabel('Lifetime (ps)'); 
-    yyaxis right; ylabel("Cohen's d");
-    annotation('textbox',[0.5 0.7 0.2 0.2],'String',ann,...
+    yyaxis right; ylabel(YSTRING);
+    annotation('textbox',[0.4 0.7 0.2 0.2],'String',ann,...
         'FitBoxToText','on','FontSize',12,'EdgeColor',[1 1 1]);
     title('')
     ax = gca; ax.FontSize = 12;
