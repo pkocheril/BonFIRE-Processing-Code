@@ -2,15 +2,16 @@
 %%% v2 - improved auto-lifetime fit selection
 %%% v3 - bug fixes
 %%% v4 - peak fitting in post-batch analysis
+%%% v5 - lifetime-weighted IR spectra, bug fixes
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_07_18_PK/'
+%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_08_15_PK/'
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = []; % [] = auto-detect, 0 = new analysis, 
 % 1 = load individual .dats, 2 = read structure.xml
-runtype = 0; % 0 = process all, 1 = test run with a few files,
+runtype = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
 targetfolders = []; % indices of folders to process, [] = dialog
 t0pos = []; % specify t0 position (mm), [] = autofind
@@ -21,8 +22,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 1; % 1 = write batch processed files, 0 = not
-writefigsyn = 1; % 1 = write figure files, 0 = not
+writeprocyn = 0; % 1 = write batch processed files, 0 = not
+writefigsyn = 0; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -617,12 +618,12 @@ if loadprevious == 0 % run new analysis
 
                             if max(ismember(fitchannels,1)) && ch1snr >= snrcutoff
                                 % Lifetime fitting
-                                [tint,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
+                                [~,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
                                     ch1lifetime1,ch1lifetime2,ch1a1a2,ch1fwhm,ch1r2,ch1resid,ch1srr,ch1fftx,ch1ffty,currltfittype] = ...
                                     ltfitfn(t,ch1,currltfittype,ch1peaksign,ch1peak,ch1snr,...
                                     currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
-                                [tint,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
+                                [~,ch1int,ch1fitvector,~,ch1fitcurve,ch1fitval,...
                                     ch1lifetime1,ch1lifetime2,ch1a1a2,ch1fwhm,ch1r2,ch1resid,ch1srr,ch1fftx,ch1ffty,~] = ...
                                     ltfitfn(t,ch1,0,ch1peaksign,ch1peak,ch1snr,...
                                     currpulsewidth,ltmin,ltmax,ch1basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
@@ -653,12 +654,12 @@ if loadprevious == 0 % run new analysis
         
                             if max(ismember(fitchannels,3)) && ch3snr >= snrcutoff
                                 % Lifetime fitting
-                                [tint,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
+                                [~,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
                                     ch3lifetime1,ch3lifetime2,ch3a1a2,ch3fwhm,ch3r2,ch3resid,ch3srr,ch3fftx,ch3ffty,currltfittype] = ...
                                     ltfitfn(t,ch3,currltfittype,ch3peaksign,ch3peak,ch3snr,...
                                     currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
-                                [tint,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
+                                [~,ch3int,ch3fitvector,~,ch3fitcurve,ch3fitval,...
                                     ch3lifetime1,ch3lifetime2,ch3a1a2,ch3fwhm,ch3r2,ch3resid,ch3srr,ch3fftx,ch3ffty,~] = ...
                                     ltfitfn(t,ch3,0,ch3peaksign,ch3peak,ch3snr,...
                                     currpulsewidth,ltmin,ltmax,ch3basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
@@ -689,12 +690,12 @@ if loadprevious == 0 % run new analysis
         
                             if max(ismember(fitchannels,4)) && ch4snr >= snrcutoff
                                 % Lifetime fitting
-                                [tint,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
+                                [~,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
                                     ch4lifetime1,ch4lifetime2,ch4a1a2,ch4fwhm,ch4r2,ch4resid,ch4srr,ch4fftx,ch4ffty,currltfittype] = ...
                                     ltfitfn(t,ch4,currltfittype,ch4peaksign,ch4peak,ch4snr,...
                                     currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
-                                [tint,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
+                                [~,ch4int,ch4fitvector,~,ch4fitcurve,ch4fitval,...
                                     ch4lifetime1,ch4lifetime2,ch4a1a2,ch4fwhm,ch4r2,ch4resid,ch4srr,ch4fftx,ch4ffty,~] = ...
                                     ltfitfn(t,ch4,0,ch4peaksign,ch4peak,ch4snr,...
                                     currpulsewidth,ltmin,ltmax,ch4basefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
@@ -725,12 +726,12 @@ if loadprevious == 0 % run new analysis
         
                             if max(ismember(fitchannels,5)) && spcmsnr >= snrcutoff
                                 % Lifetime fitting
-                                [tint,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
+                                [~,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
                                     spcmlifetime1,spcmlifetime2,spcma1a2,spcmfwhm,spcmr2,spcmresid,spcmsrr,spcmfftx,spcmffty,currltfittype] = ...
                                     ltfitfn(t,spcm,currltfittype,spcmpeaksign,spcmpeak,spcmsnr,...
                                     currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
                             else % run with currltfittype = 0
-                                [tint,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
+                                [~,spcmint,spcmfitvector,~,spcmfitcurve,spcmfitval,...
                                     spcmlifetime1,spcmlifetime2,spcma1a2,spcmfwhm,spcmr2,spcmresid,spcmsrr,spcmfftx,spcmffty,~] = ...
                                     ltfitfn(t,spcm,0,spcmpeaksign,spcmpeak,spcmsnr,...
                                     currpulsewidth,ltmin,ltmax,spcmbasefit,currbasefittype,floatbase,IRWN,prbWL,troubleshoot);
@@ -1122,7 +1123,8 @@ figvis = 'on';
 
 % Analysis options
 analysistype = []; % 0 = nothing, 1 = load data, 2 = contours, 
-% 3 = lifetimes, 4 = peak fitting, 5 = peak overlay, [] = dialog
+% 3 = lifetimes, 4 = peak fitting, 5 = peak overlay, 6 = lifetime-weighted spectra,
+% [] = dialog
 savecontours = 0; % 1 = save contours, 0 = not
 xaxischoice = 3; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 % 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
@@ -1133,7 +1135,7 @@ plotfits = 0; % 1 = show individual peak fits, else don't
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
     'SelectionMode','multiple','ListString',{'Load data','Contour maps',...
-    'Lifetime comparisons','Peak fitting','Peak overlay'});
+    'Lifetime comparisons','Peak fitting','Peak overlay','Lifetime-weighted spectra'});
     analysistype = indx;
 end
 
@@ -1165,6 +1167,14 @@ colorset(18,:) = [0.5 0.8 0.5]; % pale green
 colorset(19,:) = [0 0 1]; % dark blue
 colorset(20,:) = [0.5 0 0.5]; % violet
 colorset(21,:) = [0.3 0 0.3]; % dark purple
+
+% Marker selection
+mark = strings(15,1);
+mark(1) = "*"; mark(2) = "<"; mark(3) = "square";
+mark(4) = ">"; mark(5) = "x"; mark(6) = "diamond";
+mark(7) = "^"; mark(8) = "+"; mark(9) = "pentagram";
+mark(10) = "v"; mark(11) = "o"; mark(12) = "hexagram"; 
+mark(13) = "_"; mark(14) = "|"; mark(15) = ".";
 
 sf = fieldnames(summary); % summary fields
 maxfiles = 0; maxTlength = 0; maxalignlength = 0;
@@ -1386,7 +1396,7 @@ if max(ismember(analysistype,3))
     legend(ltlegend);
 end
 
-peakfits.title = 'All fits';
+peakfits.title = 'All fits'; % set up structure
 if max(ismember(analysistype,4))
     % Peak fitting - Gauss2 for probe, Gauss+line for IR
     for i=subset
@@ -1412,19 +1422,23 @@ if max(ismember(analysistype,4))
             [w1,wind] = sort(w1);
             sigmatrix = sigmatrix(wind,tind);
             % Fitting
-            xval = w1; yval = max(sigmatrix,[],2); yval = yval./max(yval);
+            xval = w1; yval = max(sigmatrix,[],2); 
+            [maxy,maxind] = max(yval(3:end-3)); yval = yval./maxy;
             gx = round(min(xval)):0.5:round(max(xval)); gx = gx.';
             % Gauss + quadratic fit
             fn = @(x) x(1)+x(2)*xval+x(3)*xval.^2+x(4).*exp(-x(5).*(xval-x(6)).^2)-yval;
             opt=optimoptions(@lsqnonlin);
             opt.Display = 'off'; % silence console output
-            soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.005 mean(w1)],...
-                [-Inf -Inf 0 -Inf -Inf 800], ...
-                [Inf Inf 0 Inf Inf 5000],opt);
+            soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.007 xval(maxind)],...
+                [-Inf -Inf 0 -Inf 0 min(xval)], ...
+                [Inf Inf 0 Inf 0.02 max(xval)],opt);
             gy = soln(1)+soln(2)*gx+soln(3)*gx.^2+soln(4).*exp(-soln(5).*(gx-soln(6)).^2);
             peakfits.('folder'+string(i)).center = soln(6);
             peakfits.('folder'+string(i)).fitvector = soln;
             peakfits.('folder'+string(i)).amp = 1;
+            stdev = sqrt(1./(2*soln(5)));
+            fwhm = 2*sqrt(2*log(2))*stdev;
+            peakfits.('folder'+string(i)).fwhm = fwhm;
         else % probe sweep
             xstring = 'ω_{probe} (cm^{-1})';
             w1 = 1e7./prb(1:nfiles,i);
@@ -1467,7 +1481,7 @@ if max(ismember(analysistype,4))
             xlim([min(w1) max(w1)]);
             ax = gca; ax.FontSize = 12;
         end
-        peakfits.('folder'+string(i)).foldername = string(subfolders(i));
+        peakfits.('folder'+string(i)).foldername = string(subfolders(targetfolders(i)));
         peakfits.('folder'+string(i)).xval = xval;
         peakfits.('folder'+string(i)).yval = yval;
         peakfits.('folder'+string(i)).xfit = gx;
@@ -1480,40 +1494,37 @@ if max(ismember(analysistype,5))
     % Peak overlay
     [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
     'SelectionMode','multiple','ListString',subfolders(targetfolders));
-    overleg = strings(length(overset),1);
+    overleg = subfolders(targetfolders(overset));
     % Overlay figure
     figure; hold on;
     % minx = 1e6; maxx = 0;
     for j=1:length(overset)
         i = overset(j);
         if length(overset) <= height(colorset)
-            linecolor = colorset(j,:);
+            linecolor = colorset(i,:);
         else
             redamt = exp((j-length(overset))*2/length(overset));
             greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
             blueamt = exp(-2*j/length(overset));
             linecolor = [redamt greenamt blueamt];
         end
+        if length(overset) <= length(mark)
+            marker = mark(i);
+        else
+            marker = mark(end);
+        end
         xval = peakfits.('folder'+string(i)).xval;
         yval = peakfits.('folder'+string(i)).yval;
         yval = yval./peakfits.('folder'+string(i)).amp;
-        plot(xval,yval,'.','MarkerSize',20,'Color',linecolor);
-        overleg(j) = {peakfits.('folder'+string(i)).foldername};
-        % if min(xval) < minx
-        %     minx = min(xval);
-        % end
-        % if max(xval) > maxx
-        %     maxx = max(xval);
-        % end
+        plot(xval,yval,marker,'MarkerSize',8,'LineWidth',2,'Color',linecolor);
     end
     xlabel(peakfits.('folder'+string(i)).xstring); ylabel('Normalized peak (AU)');
-    %xlim([minx maxx]);
     legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
     ax = gca; ax.FontSize = 15;
     for j=1:length(overset) % plot fits
         i = overset(j);
         if length(overset) <= height(colorset)
-            linecolor = colorset(j,:);
+            linecolor = colorset(i,:);
         else
             redamt = exp((j-length(overset))*2/length(overset));
             greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
@@ -1527,6 +1538,43 @@ if max(ismember(analysistype,5))
     end
 end
 
+if max(ismember(analysistype,6))
+    % Lifetime-weighted spectra
+    figure; hold on;
+    for j=1:length(overset)
+        i = overset(j);
+        plot([-1 -1],[-1 -1],'-','Marker',mark(i),'MarkerSize',8,'LineWidth',2,'Color',colorset(i,:));
+    end
+    legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
+    for j=1:length(overset)
+        i = overset(j);
+        ltwt = lt1(:,i).*pkht(:,i);
+        % Fitting
+        xval = wIR(:,i); yval = ltwt;
+        [maxy,maxind] = max(yval); yval = yval./maxy;
+        gx = round(min(xval)):0.5:round(max(xval)); gx = gx.';
+        % Gauss + quadratic fit
+        fn = @(x) x(1)+x(2)*xval+x(3)*xval.^2+x(4).*exp(-x(5).*(xval-x(6)).^2)-yval;
+        opt=optimoptions(@lsqnonlin);
+        opt.Display = 'off'; % silence console output
+        soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.007 xval(maxind)],...
+            [-Inf -Inf 0 -Inf 0 min(xval)], ...
+            [Inf Inf 0 Inf 0.02 max(xval)],opt);
+        gy = soln(1)+soln(2)*gx+soln(3)*gx.^2+soln(4).*exp(-soln(5).*(gx-soln(6)).^2);
+        peakfits.('folder'+string(i)).center = soln(6);
+        peakfits.('folder'+string(i)).fitvector = soln;
+        peakfits.('folder'+string(i)).amp = 1;
+        stdev = sqrt(1./(2*soln(5)));
+        fwhm = 2*sqrt(2*log(2))*stdev;
+        peakfits.('folder'+string(i)).fwhm = fwhm;
+        % Plotting
+        plot(xval,yval,mark(i),'MarkerSize',8,'LineWidth',2,'Color',colorset(i,:));
+        plot(gx,gy,'LineWidth',3,'Color',colorset(i,:));
+    end
+    xlim([2100 2300]);
+    xlabel('ω_{IR} (cm^{-1})'); ylabel('Lifetime-weighted spectra (AU)');
+    ax = gca; ax.FontSize = 15;
+end
 
 %% Pairwise comparisons
 statcomparison = 0;
@@ -2039,7 +2087,7 @@ function makesubpanel(T,SIGNAL,SIGSDS,TBASE,SIGBASE,BASECURVE,TFIT,FITCURVE,...
     errorbar(T,SIGNAL,SIGSDS,'o','Color',col1,'LineWidth',2);
     plot(TBASE,SIGBASE,'o','Color',col2,'LineWidth',2); 
     plot(T,BASECURVE,'-','Color',col3,'LineWidth',2);
-    if SIGNAL ~= RESID % plot fit if truly fitted (resid = signal if no fit)
+    if sum(SIGNAL)+length(SIGNAL) ~= sum(RESID)+length(RESID) % plot fit if truly fitted (resid = signal if no fit)
         plot(TFIT,FITCURVE,'-','Color',col4,'LineWidth',2);
         LEGEND(4) = {'Fit'}; yyaxis right; % plot residuals on secondary axis
         plot(TINT,RESID); LEGEND(5) = {'Residuals'};
