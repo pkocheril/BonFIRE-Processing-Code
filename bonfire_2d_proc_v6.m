@@ -3,9 +3,10 @@
 %%% v3 - bug fixes
 %%% v4 - peak fitting in post-batch analysis
 %%% v5 - lifetime-weighted IR spectra, bug fixes
+%%% v6 - bug fixes, normalization update for improved fitting, tracktiming
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_08_15_PK/'
+%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_08_29_PK/'
 clear; clc; close all;
 
 % Main configuration options
@@ -28,12 +29,13 @@ powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
 floatbase = 0.1; % fraction to float baseline coeffs (0.1 -> +/- 10%)
-cutlow = 0.05; % lower baseline fit cutoff, (default 5th %ile)
+cutlow = 0.03; % lower baseline fit cutoff, (default 3rd %ile)
 cuthigh = 0.8; % upper baseline fit cutoff, (default 80th %ile)
 verbose = 2; % 2 = all info on figure, 1 = regular figure annotation, 
 % 0 = no figure annotation
 showprogress = 1; % show progress as fitting proceeds over pixels in image
 snrcutoff = -Inf; % SNR minimum for lifetime image fitting (-Inf = fit all)
+tracktiming = 0; % 0 = default, 1 = track timing of calculations
 troubleshoot = 0; % 0 = default, 1 = show everything along the way
 
 % Even more configuration options (largely obsolete)
@@ -122,6 +124,10 @@ else % not a test run
     else
         folders = 1:numel(subfolders); % all folders
     end
+end
+
+if tracktiming == 1
+    tic
 end
 
 if loadprevious == 0 % run new analysis
@@ -326,6 +332,9 @@ if loadprevious == 0 % run new analysis
                         end
                     end
                     infoarray = importdata(infofilename); infofile = infoarray.data;
+                    if length(infofile) < 12 % import failed
+                    	infotable = readtable(infofilename); infofile = table2array(infotable(3:end,2));
+                    end
                     xinitial = infofile(1); xfinal = infofile(2); xsteps = infofile(3);
                     yinitial = infofile(4); yfinal = infofile(5); ysteps = infofile(6);
                     zinitial = infofile(7); zfinal = infofile(8); zsteps = infofile(9);
@@ -435,6 +444,7 @@ if loadprevious == 0 % run new analysis
                     loaddata(workingdirectory,subfolders,ii,currentfile,...
                     currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
                 channels = zeros(5,1); channels(2) = 2; % to keep track of data channels present
+                data = data.*1e3; % convert V to mV
                 if contains(currentfile,'.txt') % run again for .txt with same file
                     if width(data) > 2
                         ch1data = data(:,2);
@@ -450,21 +460,21 @@ if loadprevious == 0 % run new analysis
                     [~,ch1data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch1file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(1) = 1;
+                    channels(1) = 1; ch1data = ch1data.*1e3; % convert V to mV
                 end
                 ch3file = string(currentfile(1:end-7))+'CH3'+string(currentfile(end-3:end));
                 if isfile(ch3file)
                     [~,ch3data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch3file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(3) = 3;
+                    channels(3) = 3; ch3data = ch3data.*1e3; % convert V to mV
                 end
                 ch4file = string(currentfile(1:end-7))+'CH4'+string(currentfile(end-3:end));
                 if isfile(ch4file)
                     [~,ch4data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch4file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(4) = 4;
+                    channels(4) = 4; ch4data = ch4data.*1e3; % convert V to mV
                 end
                 spcmfile = string(currentfile(1:end-7))+'SPCM'+string(currentfile(end-3:end));
                 if isfile(spcmfile)
@@ -860,19 +870,19 @@ if loadprevious == 0 % run new analysis
                             if powernormtype > 0 % prepare y-axis label
                                 normlabel = 'Norm. ';
                                 if powernormtype == 1
-                                    pmtunitlabel = '(V/mW_{IR})';
+                                    pmtunitlabel = '(mV/mW_{IR})';
                                     spcmunitlabel = '(cpms/mW_{IR})';
                                 else
                                     if powernormtype == 2
-                                        pmtunitlabel = '(V/mW^{2})';
+                                        pmtunitlabel = '(mV/mW^{2})';
                                     else % powernormtype == 3
-                                        pmtunitlabel = '(V_{gc}/mW^{2})';
+                                        pmtunitlabel = '(mV_{gc}/mW^{2})';
                                     end
                                     spcmunitlabel = '(cpms/mW^{2})';
                                 end
                             else
                                 normlabel = 'Raw ';
-                                pmtunitlabel = '(V)';
+                                pmtunitlabel = '(mV)';
                                 spcmunitlabel = '(cpms)';
                             end
     
@@ -941,6 +951,9 @@ if loadprevious == 0 % run new analysis
                             if writefigsyn == 1
                                 saveas(fig,outname+'_proc.png')
                             end
+                        end
+                        if tracktiming == 1
+                            toc; disp('End pixel');
                         end
                     end
                 end
@@ -1057,6 +1070,9 @@ if loadprevious == 0 % run new analysis
                 summary.('folder'+string(ii)).('file'+string(jj)) = cs;
                 % Clear cs for next file
                 cs = structfun(@(x) [], cs, 'UniformOutput', false);
+                if tracktiming == 1
+                    toc; disp('End file');
+                end
             end
         end
     end
@@ -1110,7 +1126,6 @@ else % reload previously processed data
     end
 end
 
-
 %% Post-batch analysis
 % Master array has been replaced by the summary structure! Use the GUI to 
 % inspect its contents and summary.(folder).(file).(value) to pull from it.
@@ -1135,7 +1150,7 @@ plotfits = 0; % 1 = show individual peak fits, else don't
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
     'SelectionMode','multiple','ListString',{'Load data','Contour maps',...
-    'Lifetime comparisons','Peak fitting','Peak overlay','Lifetime-weighted spectra'});
+    'Lifetime comparisons','Peak fitting','Peak overlay','Lifetime-weighted spectra with overlay'});
     analysistype = indx;
 end
 
@@ -1155,26 +1170,26 @@ colorset(6,:) = [0.2 0.8 0.8]; % light blue
 colorset(7,:) = [0.8 0.8 0.2]; % yellow
 colorset(8,:) = [0.15 0.6 1]; % moderate blue
 colorset(9,:) = [0.2 0.8 0.2]; % green
-colorset(10,:) = [0.1 0.4 0.8]; % blue
+colorset(10,:) = [0.5 0.5 1]; % lavender
 colorset(11,:) = [1 0.35 0.35]; % salmon
-colorset(12,:) = [0.5 0.5 1]; % lavender
-colorset(13,:) = [0.8 0.2 0.8]; % magenta
-colorset(14,:) = [0.8 0.6 0.1]; % yellow-orange
-colorset(15,:) = [0.2 0.2 0.8]; % indigo
-colorset(16,:) = [0.6 0.8 0.1]; % yellow-green
-colorset(17,:) = [0.6 0.1 0.8]; % purple
-colorset(18,:) = [0.5 0.8 0.5]; % pale green
+colorset(12,:) = [0.8 0.2 0.8]; % magenta
+colorset(13,:) = [0.5 0.8 0.5]; % pale green
+colorset(14,:) = [0.1 0.4 0.8]; % blue
+colorset(15,:) = [0.8 0.6 0.1]; % yellow-orange
+colorset(16,:) = [0.5 0 0.5]; % violet
+colorset(17,:) = [0.6 0.8 0.1]; % yellow-green
+colorset(18,:) = [0.6 0.1 0.8]; % purple
 colorset(19,:) = [0 0 1]; % dark blue
-colorset(20,:) = [0.5 0 0.5]; % violet
+colorset(20,:) = [0.2 0.2 0.8]; % indigo
 colorset(21,:) = [0.3 0 0.3]; % dark purple
 
 % Marker selection
-mark = strings(15,1);
+mark = strings(2,1);
 mark(1) = "*"; mark(2) = "<"; mark(3) = "square";
 mark(4) = ">"; mark(5) = "x"; mark(6) = "diamond";
 mark(7) = "^"; mark(8) = "+"; mark(9) = "pentagram";
 mark(10) = "v"; mark(11) = "o"; mark(12) = "hexagram"; 
-mark(13) = "_"; mark(14) = "|"; mark(15) = ".";
+mark(13) = "_"; mark(14) = "|"; mark(15) = "x";
 
 sf = fieldnames(summary); % summary fields
 maxfiles = 0; maxTlength = 0; maxalignlength = 0;
@@ -1238,8 +1253,7 @@ photothermal = squeeze(rawsig(:,end,:));
 defaultfont = 25;
 tD = time(1,:);
 
-if max(ismember(analysistype,2))
-    % Plotting contours
+if max(ismember(analysistype,2)) % plotting contours
     for i=subset
         nfiles = summary.(sf{i}).nfiles;
         if isscalar((unique(rmmissing(nonzeros(prb(:,i)))))) % no probe tuning --> IR sweep
@@ -1270,7 +1284,6 @@ if max(ismember(analysistype,2))
         end
         t1 = timealign(i,:);
         sigmatrix = csiga(:,:,i);
-
         if length(rmmissing(w1)) > 1
             % Auto-sorting
             [t1,tind] = sort(t1);
@@ -1283,13 +1296,11 @@ if max(ismember(analysistype,2))
             else
                 contourstring = 'Corrected signal at '+nonswept+' (AU)';
             end
-
             % Color mapping
             map1 = [linspace(startcolor(1),1,100) linspace(1,endcolor(1),100)];
             map2 = [linspace(startcolor(2),1,100) linspace(1,endcolor(2),100)];
             map3 = [linspace(startcolor(3),1,100) linspace(1,endcolor(3),100)];
             map = [map1.' map2.' map3.'];
-
             % Plotting
             contour = figure('visible',figvis);
             tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
@@ -1298,7 +1309,6 @@ if max(ismember(analysistype,2))
             %plot(t1,max(sigmatrix,[],1),'Color',startcolor,'LineWidth',2); ylabel('Peak (AU)');
             plot(t1,sum(sigmatrix(1:length(rmmissing(w1)),:)/length(rmmissing(w1)),1),'Color',startcolor,'LineWidth',2); ylabel('Mean (AU)');
             xlim([min(t1) max(t1)]); xlabel(xstring);
-
             % Normal contour
             nexttile([3 3]);
             contourf(x1,x2,sigmatrix); colormap(map); cb=colorbar;
@@ -1306,12 +1316,10 @@ if max(ismember(analysistype,2))
             cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom";
             xlabel(xstring); ylabel(ystring);
             xlim([min(t1) max(t1)]); ylim([min(w1) max(w1)]);
-
             % Blank square (top-right)
             nexttile([1 1]);
             xticks([]); yticks([]);
             annotation('rectangle',[0.78 0.78 0.4 0.4],'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
-
             % Frequency 1D cross-section
             nexttile([3 1]);
             plot(max(sigmatrix,[],2),w1,'Color',endcolor,'LineWidth',2); xlabel('Peak (AU)');
@@ -1324,8 +1332,7 @@ if max(ismember(analysistype,2))
     end
 end
 
-if max(ismember(analysistype,3))
-    % Set up x-axis for lifetime plots
+if max(ismember(analysistype,3)) % lifetime comparisons
     if xaxischoice == 0
         xdata = w1;
         label = 'λ_{probe} (nm)';
@@ -1358,10 +1365,11 @@ if max(ismember(analysistype,3))
     tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
     % τ1
     nexttile([1 2]); hold on;
-    for i=subset
-        redamt = exp((i-length(subset))*2/length(subset));
-        greenamt = ((-4/length(subset)^2)*(i-0.5*length(subset))^2+1)^2;
-        blueamt = exp(-2*i/length(subset));
+    for j=1:length(subset)
+        i = subset(j);
+        redamt = exp((j-length(subset))*2/length(subset));
+        greenamt = ((-4/length(subset)^2)*(j-0.5*length(subset))^2+1)^2;
+        blueamt = exp(-2*j/length(subset));
         linecolor = [redamt greenamt blueamt];
         plot(xdata,lt1(:,i),'Color',linecolor,'LineWidth',2);
         ltlegend(i) = string(wIR(1,i))+' cm{-1}';
@@ -1397,8 +1405,8 @@ if max(ismember(analysistype,3))
 end
 
 peakfits.title = 'All fits'; % set up structure
-if max(ismember(analysistype,4))
-    % Peak fitting - Gauss2 for probe, Gauss+line for IR
+
+if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line for IR
     for i=subset
         nfiles = summary.(sf{i}).nfiles;
         sigmatrix = csig(1:nfiles,:,i);
@@ -1455,28 +1463,39 @@ if max(ismember(analysistype,4))
             sigmatrix = sigmatrix(wind,tind);
             % Fitting
             xval = w1; yval = max(sigmatrix,[],2);
+            [maxy,maxind] = max(yval(3:end-3)); yval = yval./maxy;
             if width(xval) == length(xval)
                 xval = xval.'; % make column vector
             end
             if width(yval) == length(yval)
                 yval = yval.'; % make column vector
             end
-            gfit = fit(xval,yval,'gauss2');
+            % Gauss2 + linear fit
             gx = min(xval):2:max(xval); gx = gx.';
-            gy = gfit.a1*exp(-((gx-gfit.b1)/gfit.c1).^2) + gfit.a2*exp(-((gx-gfit.b2)/gfit.c2).^2);
-            gv = gy;
-            peakfits.('folder'+string(i)).center = gfit.b1;
-            peakfits.('folder'+string(i)).center2 = gfit.b2;
-            peakfits.('folder'+string(i)).amp = gfit.a1;
-            peakfits.('folder'+string(i)).amp2 = gfit.a2;
-            peakfits.('folder'+string(i)).width = gfit.c1;
-            peakfits.('folder'+string(i)).width2 = gfit.c2;
+            fn = @(x) x(1)+x(2)*xval+x(3).*exp(-x(4).*(xval-x(5)).^2)+x(6).*exp(-x(7).*(xval-x(8)).^2)-yval;
+            opt=optimoptions(@lsqnonlin);
+            options.MaxFunctionEvaluations = 1e5; % let the fit run longer
+            options.MaxIterations = 1e5; % let the fit run longer
+            options.FunctionTolerance = 1e-12; % make the fit more accurate
+            options.OptimalityTolerance = 1e-10; % make the fit more accurate
+            options.StepTolerance = 1e-10; % make the fit more precise
+            opt.Display = 'off'; % silence console output
+            soln = lsqnonlin(fn,...
+                [0 0 max(yval)-min(yval) 1e-5 xval(maxind) 0.5*(max(yval)-min(yval)) 1e-5 quantile(xval,0.35)],...
+                [0 0 0 0 1e7/960 0 0 1e7/960], ...
+                [0 0 Inf Inf 1e7/700 Inf Inf 1e7/700],opt);
+            gy = soln(1)+soln(2)*gx+soln(3).*exp(-soln(4).*(gx-soln(5)).^2)+soln(6).*exp(-soln(7).*(gx-soln(8)).^2);
+            peakfits.('folder'+string(i)).center = soln(5);
+            peakfits.('folder'+string(i)).center2 = soln(8);
+            peakfits.('folder'+string(i)).amp = soln(3);
+            peakfits.('folder'+string(i)).amp2 = soln(6);
+            peakfits.('folder'+string(i)).width = soln(4);
+            peakfits.('folder'+string(i)).width2 = soln(7);
         end
         if plotfits == 1
             figure; hold on;
             plot(xval,yval,'.','MarkerSize',20,'Color',startcolor);
             plot(gx,gy,'LineWidth',3,'Color',endcolor);
-            plot(gx,gv,'--','LineWidth',3,'Color',startcolor);
             xlabel(xstring); ylabel('Relative peak (AU)');
             xlim([min(w1) max(w1)]);
             ax = gca; ax.FontSize = 12;
@@ -1490,16 +1509,88 @@ if max(ismember(analysistype,4))
     end
 end
 
-if max(ismember(analysistype,5))
-    % Peak overlay
+if max(ismember(analysistype,5)) % peak overlay
     [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
     'SelectionMode','multiple','ListString',subfolders(targetfolders));
     overleg = subfolders(targetfolders(overset));
-    % Overlay figure
-    figure; hold on;
-    % minx = 1e6; maxx = 0;
+    figure; hold on; % overlay figure
+
+    if max(ismember(analysistype,6)) % lifetime-weighted spectra
+        tiledlayout(3,1); nexttile([2 1]); hold on;
+        % Make legend
+        for j=1:length(overset)
+            i = overset(j);
+            % Decide color and markers
+            if length(overset) <= height(colorset)
+                linecolor = colorset(i,:);
+            else
+                redamt = exp((j-length(overset))*2/length(overset));
+                greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
+                blueamt = exp(-2*j/length(overset));
+                linecolor = [redamt greenamt blueamt];
+            end
+            if i <= length(mark)
+                marker = mark(i); marksize = 8;
+            else
+                marker = "."; marksize = 20;
+            end
+            plot([-1 -1],[-1 -1],'-','Marker',marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
+        end
+        legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
+        % Plot data
+        for j=1:length(overset)
+            i = overset(j);
+            % Decide color and markers
+            if length(overset) <= height(colorset)
+                linecolor = colorset(i,:);
+            else
+                redamt = exp((j-length(overset))*2/length(overset));
+                greenamt = ((-4/length(overset)^2)*(j-0.5*length(overset))^2+1)^2;
+                blueamt = exp(-2*j/length(overset));
+                linecolor = [redamt greenamt blueamt];
+            end
+            if i <= length(mark)
+                marker = mark(i); marksize = 8;
+            else
+                marker = "."; marksize = 20;
+            end
+            ltwt = lt1(:,i).*pkht(:,i);
+            % Fitting
+            xval = wIR(:,i); yval = ltwt;
+            [maxy,maxind] = max(yval); yval = yval./maxy;
+            gx = round(min(xval)):0.5:round(max(xval)); gx = gx.';
+            % Gauss + quadratic fit
+            fn = @(x) x(1)+x(2)*xval+x(3)*xval.^2+x(4).*exp(-x(5).*(xval-x(6)).^2)-yval;
+            opt=optimoptions(@lsqnonlin);
+            opt.Display = 'off'; % silence console output
+            soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.007 xval(maxind)],...
+                [-Inf -Inf 0 -Inf 0 min(xval)], ...
+                [Inf Inf 0 Inf 0.02 max(xval)],opt);
+            gy = soln(1)+soln(2)*gx+soln(3)*gx.^2+soln(4).*exp(-soln(5).*(gx-soln(6)).^2);
+            peakfits.('folder'+string(i)).ltweighted.xval = xval;
+            peakfits.('folder'+string(i)).ltweighted.yval = yval;
+            peakfits.('folder'+string(i)).ltweighted.center = soln(6);
+            peakfits.('folder'+string(i)).ltweighted.fitvector = soln;
+            peakfits.('folder'+string(i)).ltweighted.amp = 1;
+            stdev = sqrt(1./(2*soln(5)));
+            fwhm = 2*sqrt(2*log(2))*stdev;
+            peakfits.('folder'+string(i)).ltweighted.fwhm = fwhm;
+            peakfits.('folder'+string(i)).ltweighted.xfit = gx;
+            peakfits.('folder'+string(i)).ltweighted.yfit = gy;
+            % Plotting
+            plot(xval,yval./max(gy),mark(i),'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
+            plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
+        end
+        xlim([2100 2300]); ylim([0 1.2]);
+        xlabel('ω_{IR} (cm^{-1})'); ylabel('Lifetime-weighted spectra (AU)');
+        ax = gca; ax.FontSize = 15;
+        nexttile([1 1]); hold on;
+    end
+    % Regular plot
     for j=1:length(overset)
+        % Make legend
         i = overset(j);
+        % Decide color and markers
         if length(overset) <= height(colorset)
             linecolor = colorset(i,:);
         else
@@ -1508,21 +1599,21 @@ if max(ismember(analysistype,5))
             blueamt = exp(-2*j/length(overset));
             linecolor = [redamt greenamt blueamt];
         end
-        if length(overset) <= length(mark)
-            marker = mark(i);
+        if i <= length(mark)
+            marker = mark(i); marksize = 8;
         else
-            marker = mark(end);
+            marker = "."; marksize = 20;
         end
-        xval = peakfits.('folder'+string(i)).xval;
-        yval = peakfits.('folder'+string(i)).yval;
-        yval = yval./peakfits.('folder'+string(i)).amp;
-        plot(xval,yval,marker,'MarkerSize',8,'LineWidth',2,'Color',linecolor);
+        plot([-1 -1],[-1 -1],'-','Marker',marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
     end
     xlabel(peakfits.('folder'+string(i)).xstring); ylabel('Normalized peak (AU)');
-    legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
-    ax = gca; ax.FontSize = 15;
-    for j=1:length(overset) % plot fits
+    if max(ismember(analysistype,6)) == 0 % make legend if not made already
+        legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
+    end
+    ax = gca; ax.FontSize = 15; xl1 = []; xl2 = [];
+    for j=1:length(overset)
         i = overset(j);
+        % Decide color and markers
         if length(overset) <= height(colorset)
             linecolor = colorset(i,:);
         else
@@ -1531,50 +1622,31 @@ if max(ismember(analysistype,5))
             blueamt = exp(-2*j/length(overset));
             linecolor = [redamt greenamt blueamt];
         end
+        if i <= length(mark)
+            marker = mark(i); marksize = 8;
+        else
+            marker = "."; marksize = 20;
+        end
+        % Plot data
+        xval = peakfits.('folder'+string(i)).xval;
+        yval = peakfits.('folder'+string(i)).yval;
         gx = peakfits.('folder'+string(i)).xfit;
         gy = peakfits.('folder'+string(i)).yfit;
-        gy = gy./peakfits.('folder'+string(i)).amp;
-        plot(gx,gy,'LineWidth',3,'Color',linecolor);
+        plot(xval,yval./max(gy),marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
+        % Plot fits
+        plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
+        % Figure out bounds
+        if isempty(xl1) || min(xval) < xl1
+            xl1 = min(xval);
+        end
+        if isempty(xl2) || max(xval) > xl2
+            xl2 = max(xval);
+        end
     end
+    xlim([xl1 xl2]); ylim([0 Inf]);
 end
 
-if max(ismember(analysistype,6))
-    % Lifetime-weighted spectra
-    figure; hold on;
-    for j=1:length(overset)
-        i = overset(j);
-        plot([-1 -1],[-1 -1],'-','Marker',mark(i),'MarkerSize',8,'LineWidth',2,'Color',colorset(i,:));
-    end
-    legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
-    for j=1:length(overset)
-        i = overset(j);
-        ltwt = lt1(:,i).*pkht(:,i);
-        % Fitting
-        xval = wIR(:,i); yval = ltwt;
-        [maxy,maxind] = max(yval); yval = yval./maxy;
-        gx = round(min(xval)):0.5:round(max(xval)); gx = gx.';
-        % Gauss + quadratic fit
-        fn = @(x) x(1)+x(2)*xval+x(3)*xval.^2+x(4).*exp(-x(5).*(xval-x(6)).^2)-yval;
-        opt=optimoptions(@lsqnonlin);
-        opt.Display = 'off'; % silence console output
-        soln = lsqnonlin(fn,[min(yval) (yval(end)-yval(1))./(xval(end)-xval(1)) 0 range(yval) 0.007 xval(maxind)],...
-            [-Inf -Inf 0 -Inf 0 min(xval)], ...
-            [Inf Inf 0 Inf 0.02 max(xval)],opt);
-        gy = soln(1)+soln(2)*gx+soln(3)*gx.^2+soln(4).*exp(-soln(5).*(gx-soln(6)).^2);
-        peakfits.('folder'+string(i)).center = soln(6);
-        peakfits.('folder'+string(i)).fitvector = soln;
-        peakfits.('folder'+string(i)).amp = 1;
-        stdev = sqrt(1./(2*soln(5)));
-        fwhm = 2*sqrt(2*log(2))*stdev;
-        peakfits.('folder'+string(i)).fwhm = fwhm;
-        % Plotting
-        plot(xval,yval,mark(i),'MarkerSize',8,'LineWidth',2,'Color',colorset(i,:));
-        plot(gx,gy,'LineWidth',3,'Color',colorset(i,:));
-    end
-    xlim([2100 2300]);
-    xlabel('ω_{IR} (cm^{-1})'); ylabel('Lifetime-weighted spectra (AU)');
-    ax = gca; ax.FontSize = 15;
-end
+summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 
 %% Pairwise comparisons
 statcomparison = 0;
@@ -1858,7 +1930,7 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
                     CURRLTFITTYPE = 1; % monoexponential (normal)
                 end
             else % double bond or CH
-                if (IRWNum == 1300 || IRWNum == 1500 || IRWNum == 1590) && PROBE < 770
+                if (IRWNum == 1300 || IRWNum == 1500 || IRWNum == 1590) && PROBE < 770 && PROBE > 690
                     CURRLTFITTYPE = 4; % stretched/compressed biexponential
                 else
                     CURRLTFITTYPE = 2; % biexponential
