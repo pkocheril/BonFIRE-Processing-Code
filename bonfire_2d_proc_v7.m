@@ -4,9 +4,10 @@
 %%% v4 - peak fitting in post-batch analysis
 %%% v5 - lifetime-weighted IR spectra, bug fixes
 %%% v6 - bug fixes, normalization update for improved fitting, tracktiming
+%%% v7 - cleaned up plotting
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_08_29_PK/'
+%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_09_06_PK/'
 clear; clc; close all;
 
 % Main configuration options
@@ -1146,6 +1147,7 @@ xaxischoice = 3; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 logcontour = 0; % 0 = linear scale, 1 = log scale
 subset = []; % [] = dialog, targetfolders = run all
 plotfits = 0; % 1 = show individual peak fits, else don't
+updatesummary = 0; % 1 = update summary structure, 0 = don't
 
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
@@ -1646,7 +1648,9 @@ if max(ismember(analysistype,5)) % peak overlay
     xlim([xl1 xl2]); ylim([0 Inf]);
 end
 
-summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
+if updatesummary == 1
+    summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
+end
 
 %% Pairwise comparisons
 statcomparison = 0;
@@ -2137,35 +2141,60 @@ function makesubpanel(T,SIGNAL,SIGSDS,TBASE,SIGBASE,BASECURVE,TFIT,FITCURVE,...
 % fits.
 
     % Make colors for figure
-    plotcolor(1,:) = [0.5 0.5 0.5]; % Data, residuals
+    plotcolor(1,:) = [0.5 0.5 0.5]; % Data
     plotcolor(2,:) = [0.9 0.1 0.1]; % CH1 baseline data
     plotcolor(3,:) = [0.7 0.4 0.1]; % CH1 baseline fit
     plotcolor(4,:) = [0.2 0.8 0.8]; % CH2 baseline data
     plotcolor(5,:) = [0.2 0.8 0.5]; % CH2 baseline fit
     plotcolor(6,:) = [0.2 0.2 0.8]; % Lifetime fit
     plotcolor(7,:) = [0 1 1];
+    plotcolor(8,:) = [174 110 180]./255; % Residuals
+    % New Excel colors
+    plotcolor(9,:) = [22 96 130]./255;
+    plotcolor(10,:) = [233 113 49]./255;
+    plotcolor(11,:) = [26 107 37]./255;
+    plotcolor(12,:) = [14 158 213]./255;
+    plotcolor(13,:) = [160 44 147]./255;
+    plotcolor(14,:) = [77 167 46]./255;
+    col1 = plotcolor(1,:);
     if CHANNEL == 2 % set colors by channel
-        col1 = plotcolor(1,:);
         col2 = plotcolor(4,:);
         col3 = plotcolor(5,:);
         col4 = plotcolor(6,:);
+        col5 = plotcolor(8,:);
     else
-        col1 = plotcolor(1,:);
-        col2 = plotcolor(2,:);
-        col3 = plotcolor(3,:);
-        col4 = plotcolor(6,:);
+        if CHANNEL == 1
+            col2 = plotcolor(9,:);
+            col3 = plotcolor(10,:);
+            col4 = plotcolor(11,:);
+            col5 = plotcolor(12,:);
+        else
+            col2 = plotcolor(2,:);
+            col3 = plotcolor(3,:);
+            col4 = plotcolor(13,:);
+            col5 = plotcolor(14,:);
+        end
     end
     hold on; xlim([min(T) max(T)]); xlabel('Time delay (ps)'); ylabel(LABEL);
-    errorbar(T,SIGNAL,SIGSDS,'o','Color',col1,'LineWidth',2);
-    plot(TBASE,SIGBASE,'o','Color',col2,'LineWidth',2); 
-    plot(T,BASECURVE,'-','Color',col3,'LineWidth',2);
+    % Make legend
+    plot([min(T)-10 min(T)-10],[min(T)-10 min(T)-10],'o','Color',col1,'LineWidth',2);
+    plot([min(T)-10 min(T)-10],[min(T)-10 min(T)-10],'o','Color',col2,'LineWidth',2); 
+    plot([min(T)-10 min(T)-10],[min(T)-10 min(T)-10],'-','Color',col3,'LineWidth',2);
+    % Plot residuals
     if sum(SIGNAL)+length(SIGNAL) ~= sum(RESID)+length(RESID) % plot fit if truly fitted (resid = signal if no fit)
-        plot(TFIT,FITCURVE,'-','Color',col4,'LineWidth',2);
-        LEGEND(4) = {'Fit'}; yyaxis right; % plot residuals on secondary axis
-        plot(TINT,RESID); LEGEND(5) = {'Residuals'};
-        ylabel('Residuals (AU)');
+        yyaxis right; % plot residuals on secondary axis
+        plot(TINT,RESID,'Color',col5,'LineWidth',1.3); LEGEND(4) = {'Fit'};  LEGEND(5) = {'Residuals'};
+        ylabel('Residuals (AU)'); yyaxis left; 
+        plot([min(T)-10 min(T)-10],[min(T)-10 min(T)-10],'-','Color',col4,'LineWidth',2);
     end
-    legend(LEGEND); lg = legend; lg.EdgeColor = [1 1 1];
+    legend(LEGEND); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
+    % Plot data
+    patch([T; flip(T)],[SIGNAL-SIGSDS; flip(SIGNAL+SIGSDS)],'k','FaceAlpha',0.25,'EdgeColor','none')
+    plot(T,BASECURVE,'-','Color',col3,'LineWidth',3);
+    if sum(SIGNAL)+length(SIGNAL) ~= sum(RESID)+length(RESID) % plot fit if truly fitted (resid = signal if no fit)
+        plot(TFIT,FITCURVE,'-','Color',col4,'LineWidth',2.5);
+    end
+    plot(T,SIGNAL,'o','Color',col1,'LineWidth',2); plot(TBASE,SIGBASE,'o','Color',col2,'LineWidth',2);
     ax = gca; ax.FontSize = 12; hold off;
     return
 end
