@@ -9,18 +9,19 @@
 % fitting, now interpolates residuals to original t, added basicltfit 
 % function, added pkfit and Voigt functions, updated colors, added 
 % monoexponential error estimation
+%%% v9 - bug fixes
 
 % Initialize
-%cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_09_25_PK/'
+cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_11_11_PK/'
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = []; % [] = auto-detect, 0 = new analysis, 
 % 1 = load individual .dats, 2 = read structure.xml, 3 = re-process partial
-runtype = 2; % 0 = process all, 1 = test run with a few files,
+runtype = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
-targetfolders = []; % indices of folders to process, [] = dialog
-t0pos = []; % specify t0 position(s) (mm), [] = autofind
+targetfolders = 1:3; % indices of folders to process, [] = dialog
+t0pos = 204.8; % specify t0 position(s) (mm), [] = autofind
 
 % Additional configuration options
 ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
@@ -28,8 +29,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 0; % 1 = write batch processed files, 0 = not
-writefigsyn = 0; % 1 = write figure files, 0 = not
+writeprocyn = 1; % 1 = write batch processed files, 0 = not
+writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -348,7 +349,10 @@ if loadprevious == 0 % run new analysis
                             end
                         end
                     end
-                    infotable = readtable(infofilename); infofile = table2array(infotable(3:end,2));
+                    infoarray = importdata(infofilename); infofile = infoarray.data;
+                    if length(infofile) < 12 % import failed
+                    	infotable = readtable(infofilename); infofile = table2array(infotable(3:end,2));
+                    end
                     xinitial = infofile(1); xfinal = infofile(2); xsteps = infofile(3);
                     yinitial = infofile(4); yfinal = infofile(5); ysteps = infofile(6);
                     zinitial = infofile(7); zfinal = infofile(8); zsteps = infofile(9);
@@ -392,6 +396,12 @@ if loadprevious == 0 % run new analysis
                         if length(infofile) > 31
                             probeFWHM = infofile(32);
                             levanteFWHM = infofile(33);
+                        end
+                        if length(infofile) > 33
+                            wheelfilter = infofile(34);
+                        end
+                        if length(infofile) > 34
+                            concentration = infofile(35);
                         end
                     else % if not extended info
                         pmtgain = 1; pmtBW = 1; modfreq = 0; pinholeyn = 0;
@@ -458,7 +468,7 @@ if loadprevious == 0 % run new analysis
                     loaddata(workingdirectory,subfolders,ii,currentfile,...
                     currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
                 channels = zeros(5,1); channels(2) = 2; % to keep track of data channels present
-                data = data.*1e3; % convert V to mV
+                % data = data.*1e3; % convert V to mV
                 if contains(currentfile,'.txt') % run again for .txt with same file
                     if width(data) > 2
                         ch1data = data(:,2);
@@ -474,21 +484,21 @@ if loadprevious == 0 % run new analysis
                     [~,ch1data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch1file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(1) = 1; ch1data = ch1data.*1e3; % convert V to mV
+                    channels(1) = 1; %ch1data = ch1data.*1e3; % convert V to mV
                 end
                 ch3file = string(currentfile(1:end-7))+'CH3'+string(currentfile(end-3:end));
                 if isfile(ch3file)
                     [~,ch3data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch3file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(3) = 3; ch3data = ch3data.*1e3; % convert V to mV
+                    channels(3) = 3; %ch3data = ch3data.*1e3; % convert V to mV
                 end
                 ch4file = string(currentfile(1:end-7))+'CH4'+string(currentfile(end-3:end));
                 if isfile(ch4file)
                     [~,ch4data,~] = ...
                         loaddata(workingdirectory,subfolders,ii,ch4file,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
-                    channels(4) = 4; ch4data = ch4data.*1e3; % convert V to mV
+                    channels(4) = 4; %ch4data = ch4data.*1e3; % convert V to mV
                 end
                 spcmfile = string(currentfile(1:end-7))+'SPCM'+string(currentfile(end-3:end));
                 if isfile(spcmfile)
@@ -896,7 +906,7 @@ if loadprevious == 0 % run new analysis
                                 end
                             else
                                 normlabel = 'Raw ';
-                                pmtunitlabel = '(mV)';
+                                pmtunitlabel = '(V)';
                                 spcmunitlabel = '(cpms)';
                             end
     
@@ -1536,6 +1546,62 @@ if updatesummary == 1
     summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 end
 
+
+%% Comparing DFG sweeps across concentration
+ftir = importdata('../2024_11_08_PK/Rh800FTIR.txt'); % 100 mM
+
+sweep1 = importdata('../2024_11_08_PK/Rh800_100uM_DMSO.txt');
+sweep2 = importdata('../2024_11_08_PK/Rh800_100uM_DMSOd6.txt');
+sweep3 = importdata('../2024_11_08_PK/Rh800_10mM_DMSOd6.txt');
+sweep4 = importdata('Rh800_1mM_DMSO.txt');
+sweep5 = importdata('Rh800_5mM_DMSO.txt');
+
+dfgx = 1200:0.1:1700; dfgx = dfgx.';
+fit1 = 0.990949.*exp(-log(2).*((dfgx-1503.19)./7.7014).^2) + 0.605264.*exp(-log(2).*((dfgx-1299.38)./11.1877).^2) + 0.608035.*exp(-log(2).*((dfgx-1593.43)./11.0338).^2) + 0.0314319.*exp(-log(2).*((dfgx-1545)./3.85751).^2) + 0.0216712.*exp(-log(2).*((dfgx-1644)./22.2586).^2) + 0.121801.*exp(-log(2).*((dfgx-1359.39)./13.6445).^2) + 0.0998971.*exp(-log(2).*((dfgx-1517.9)./-28.627).^2) + 3.12987 + -0.0070507.*dfgx + 5.78929e-06.*dfgx.^2 + -2.01414e-09.*dfgx.^3 + 2.43243e-13.*dfgx.^4 + 0.00488719.*exp(-log(2).*((dfgx-1440)./11.4528).^2) + 0.0271189.*exp(-log(2).*((dfgx-1375.92)./4.68311).^2);
+fit2 = 0.0481952.*exp(-log(2).*((dfgx-1639.61)./26.5997).^2) + 0.0896067.*exp(-log(2).*((dfgx-1361.96)./13.3531).^2) + 0.0577641.*exp(-log(2).*((dfgx-1549.71)./19.9967).^2) + 0.521063.*exp(-log(2).*((dfgx-1595.27)./11.2959).^2) + 0.0355791.*exp(-log(2).*((dfgx-1379.03)./-6.49645).^2) + -182.26 + 0.800015.*dfgx + -0.0014511.*dfgx.^2 + 1.39259e-06.*dfgx.^3 + -7.45734e-10.*dfgx.^4 + 2.11222e-13.*dfgx.^5 + -2.4711e-17.*dfgx.^6 + Voigt(0.991001, 1505.5, 7.54469, 12.8385, dfgx) + Voigt(0.584247, 1303.49, 14.6412, 7.03501, dfgx) + 0.033246.*exp(-log(2).*((dfgx-1434.96)./17.7176).^2);
+fit3 = Voigt(1.05095, 1507.07, 21.6504, 2.38147, dfgx) + Voigt(0.891355, 1598.4, 14.4727, 11.4639, dfgx) + Voigt(0.324928, 1306.02, 0.260261, 16.9701, dfgx) + 0.109586.*exp(-log(2).*((dfgx-1651.12)./15.1177).^2) + 0.0579303.*exp(-log(2).*((dfgx-1366.01)./18.5261).^2) + 0.0158839.*exp(-log(2).*((dfgx-1385.85)./7.63218).^2) + 0.0654993.*exp(-log(2).*((dfgx-1441.93)./27.078).^2) + 0.131521 + -2.72222e-06.*dfgx + -5.40692e-08.*dfgx.^2 + -3.76921e-11.*dfgx.^3 + -1.30336e-14.*dfgx.^4 + 4.29016e-18.*dfgx.^5 + 1.22299e-20.*dfgx.^6 + Voigt(0.121866, 1545, 32.53, 0.000467972, dfgx);
+fit4 = Voigt(1.0674, 1505.51, 0.0930513, 14.0485, dfgx) + Voigt(0.441755, 1597.08, 21.1687, 0.00035926, dfgx) + 0.0423159.*exp(-log(2).*((dfgx-1545.55)./6.17397).^2) + 0.0200349.*exp(-log(2).*((dfgx-1649.92)./5.69079).^2) + 12.7511 + -0.0126132.*dfgx + -2.80273e-06.*dfgx.^2 + 2.59984e-09.*dfgx.^3 + 1.7874e-12.*dfgx.^4 + -2.04664e-16.*dfgx.^5 + -3.31529e-19.*dfgx.^6;
+fit5 = Voigt(1.13126, 1506.54, 0.0678335, 14.7557, dfgx) + Voigt(0.509186, 1598.66, 19.5139, 1.92131, dfgx) + 0.0404514.*exp(-log(2).*((dfgx-1546.74)./5.24378).^2) + 0.0343428.*exp(-log(2).*((dfgx-1652.44)./8.53399).^2) + 0.129557.*exp(-log(2).*((dfgx-1417.89)./36.0042).^2) + -4.41523 + 0.0010647.*dfgx + 2.01679e-06.*dfgx.^2 + 7.61915e-10.*dfgx.^3 + -4.36319e-13.*dfgx.^4 + -5.92177e-16.*dfgx.^5 + 2.11148e-19.*dfgx.^6;
+
+sweepx = zeros(143,5); sweepy = sweepx;
+sweepx(1:height(sweep1),1) = sweep1(:,1);
+sweepx(1:height(sweep2),2) = sweep2(:,1);
+sweepx(1:height(sweep3),3) = sweep3(:,1);
+sweepx(1:height(sweep4),4) = sweep4(:,1);
+sweepx(1:height(sweep5),5) = sweep5(:,1);
+sweepy(1:height(sweep1),1) = sweep1(:,2);
+sweepy(1:height(sweep2),2) = sweep2(:,2);
+sweepy(1:height(sweep3),3) = sweep3(:,2);
+sweepy(1:height(sweep4),4) = sweep4(:,2);
+sweepy(1:height(sweep5),5) = sweep5(:,2);
+fits = [fit1 fit2 fit3 fit4 fit5];
+
+figure; hold on; box on;
+area(ftir(:,1),ftir(:,2)./1.48569,'FaceColor',[0.5 0.5 0.5],'EdgeAlpha',0,'FaceAlpha',0.7);
+for i=1:width(fits)
+    [linecolor,marker,marksize] = colormarkset(i,width(fits),'fire');
+    plot([-1 -1],[-1 -1],'-o','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
+end
+legend('FTIR','100 μM DMSO','100 μM DMSO-d_6','10 mM DMSO-d_6','1 mM DMSO','5 mM DMSO');
+lg = legend; lg.Box = 'off'; lg.AutoUpdate = 'off';
+for i=1:width(fits)
+    [linecolor,marker,marksize] = colormarkset(i,width(fits),'fire');
+    currentfit = fits(:,i);
+    plot(sweepx(:,i),sweepy(:,i)./max(currentfit),'o','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
+    plot(dfgx,fits(:,i)./max(currentfit),'-','Color',linecolor,'LineWidth',2);
+end
+xlabel('IR frequency (cm^{–1})'); ylabel('Normalized BonFIRE');
+ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
+xlim([1420 1700]); ylim([-0.05 1.05]);
+pbaspect([1.5 1 1]);
+
+
+conc = [0.1 0.1 1 5 10];
+peak = [1593.43 1595.27 1597.08 1598.66 1598.4];
+
+figure; plot(conc,peak,'o');
+xlabel('[Rh800] (mM)'); ylabel('Mode 134 frequency (cm^{–1})');
+
 %% Pairwise comparisons
 statcomparison = 0;
 if statcomparison == 1
@@ -1696,6 +1762,7 @@ function [SIGNAL,SIGSDS] = powernorm(SIGNAL,SIGSDS,IRPOWER,PRBPOWER,...
 % (temporal modulation), and scales for increased PMT gain.
 
     if POWERNORMTYPE > 0 % power normalization
+        SIGNAL = 1e3*SIGNAL; SIGSDS = 1e3*SIGSDS; % convert V to mV
         % Power corrections
         if PINHOLEYN == 1
             PRBPOWER = 0.27*PRBPOWER; % pinhole transmission is 27%
@@ -2690,7 +2757,7 @@ function [LINECOLOR,MARKER,MARKSIZE] = colormarkset(INDEX,LOOPLENGTH,COLORMAP)
     return
 end
 
-% Power normalization
+% Lifetime error estimation
 function [ERROR] = ltfiterror(LIFETIME,SNR)
 %%% This function estimates lifetime fitting error (for monoexponentials)
 % as a function of lifetime and SNR.
