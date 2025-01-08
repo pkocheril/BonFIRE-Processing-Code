@@ -10,18 +10,19 @@
 % function, added pkfit and Voigt functions, updated colors, added 
 % monoexponential error estimation
 %%% v9 - bug fixes
+%%% v10 - added tcompare and normalize functions to stack time delay sweeps
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_11_11_PK/'
+% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_12_03_PK/'
 clear; clc; close all;
 
 % Main configuration options
 loadprevious = []; % [] = auto-detect, 0 = new analysis, 
 % 1 = load individual .dats, 2 = read structure.xml, 3 = re-process partial
-runtype = 0; % 0 = process all, 1 = test run with a few files,
+runtype = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
-targetfolders = 1:3; % indices of folders to process, [] = dialog
-t0pos = 204.8; % specify t0 position(s) (mm), [] = autofind
+targetfolders = []; % indices of folders to process, [] = dialog
+t0pos = []; % specify t0 position(s) (mm), [] = autofind
 
 % Additional configuration options
 ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
@@ -1163,9 +1164,9 @@ figvis = 'on';
 % Analysis options
 analysistype = []; % 0 = nothing, 1 = load data, 2 = contours, 
 % 3 = lifetimes, 4 = peak fitting, 5 = peak overlay, 6 = lifetime-weighted spectra,
-% [] = dialog
+% 7 = Tsweep comparison, [] = dialog
 savecontours = 0; % 1 = save contours, 0 = not
-xaxischoice = 3; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
+xaxischoice = 0; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 % 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
 logcontour = 0; % 0 = linear scale, 1 = log scale
 subset = []; % [] = dialog, targetfolders = run all
@@ -1175,7 +1176,8 @@ updatesummary = 0; % 1 = update summary structure, 0 = don't
 if isempty(analysistype) % dialog to select analysis type
     [indx,~] = listdlg('PromptString',{'Select post-batch analysis type.'},...
     'SelectionMode','multiple','ListString',{'Load data','Contour maps',...
-    'Lifetime comparisons','Peak fitting','Peak overlay','Lifetime-weighted spectra with overlay'});
+    'Lifetime comparisons','Peak fitting','Peak overlay',...
+    'Lifetime-weighted spectra with overlay','Time delay sweep comparison'});
     analysistype = indx;
 end
 
@@ -1211,7 +1213,7 @@ time = NaN(length(subset),maxTlength);
 timealign = NaN(length(subset),maxalignlength);
 prb = NaN(maxfiles,length(subset));
 wIR = prb; lt1 = prb; lt2 = prb; ltr = prb; pulsewidth = prb;
-IRpowers = prb; prbpowers = prb; noise = prb; dcsbr = prb;
+IRpowers = prb; prbpowers = prb; noise = prb; dcsbr = prb; modfr = prb;
 pkht = NaN(maxfiles,length(subset));
 csig = NaN(height(wIR),width(time),length(subset)); rawsig = csig;
 csiga = NaN(height(prb),width(timealign),length(subset));
@@ -1238,6 +1240,8 @@ for i=subset % folder
         prbpowers(j,i) = summary.(sf{i}).('file'+string(j)).parameters.prbpower;
         noise(j,i) = summary.(sf{i}).('file'+string(j)).summary.noise;
         dcsbr(j,i) = summary.(sf{i}).('file'+string(j)).ch1summary.sbr;
+        modfr(j,i) = summary.(sf{i}).('file'+string(j)).parameters.modfreq;
+        ch1sig(j,1:tlength,i) = summary.(sf{i}).('file'+string(j)).ch1data.corrsig;
     end
 end
 
@@ -1365,7 +1369,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
         plot(xdata,lt1(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
         ltlegend(i) = string(wIR(1,i))+' cm{-1}';
     end
-    xticks([]); ylabel('τ_{1} (ps)');
+    xticks([]); ylabel('τ_{1} (ps)'); % no xlabel
     hold off; xlim([min(xdata) max(xdata)]); ylim([0 5]); 
     legend(ltlegend);
     % τ2
@@ -1374,7 +1378,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
         [linecolor,marker,marksize] = colormarkset(i,length(subset),[]);
         plot(xdata,lt2(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
-    xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('τ_{2} (ps)');
+    xlabel(label); ylabel('τ_{2} (ps)');
     hold off; xlim([min(xdata) max(xdata)]); ylim([0 10]); 
     legend(ltlegend);
     % A1/A2
@@ -1384,7 +1388,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
         plot(xdata,ltr(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
     set(gca,'Yscale','log');
-    xlabel('ω_{IR}+ω_{probe} (cm^{-1})'); ylabel('A_{1}/A_{2}');
+    xlabel(label); ylabel('A_{1}/A_{2}');
     xlim([min(xdata) max(xdata)]); ylim([1e-2 1e2]); 
     legend(ltlegend);
 end
@@ -1498,7 +1502,7 @@ if max(ismember(analysistype,5)) % peak overlay
             peakfits.('folder'+string(i)).ltweighted.xfit = gx;
             peakfits.('folder'+string(i)).ltweighted.yfit = gy;
             % Plotting
-            plot(xval,yval./max(gy),mark(i),'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
+            plot(xval,yval./max(gy),marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
             plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
         end
         xlim([2100 2300]); ylim([0 1.2]);
@@ -1542,65 +1546,30 @@ if max(ismember(analysistype,5)) % peak overlay
     xlim([xl1 xl2]); ylim([0 Inf]);
 end
 
+if max(ismember(analysistype,7)) % Tsweep comparison
+    for i=1:length(subset)
+        j = targetfolders(subset(i));
+        nfiles = summary.('folder'+string(j)).nfiles;
+        sigmat = squeeze(csig(1:nfiles,:,i));
+        if i == 3 || i == 5 || i == 10 % mod freq sweep
+            [sortmod,sortinds] = sort(modfr(1:nfiles,i));
+            leg = string(round(sortmod)./1000)+' kHz';
+            colormap = 'rainbow';
+        else % power sweep
+            [sortmod,sortinds] = sort(IRpowers(1:nfiles,i));
+            leg = string(round(10*sortmod)./10)+' mW';
+            colormap = [];
+        end
+        timelength = length(rmmissing(time(i,:)));
+        tcompare(time(i,1:timelength),sigmat(sortinds,1:timelength),leg,colormap,'normalize');
+        title(summary.('folder'+string(j)).foldername);
+    end
+end
+
 if updatesummary == 1
     summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 end
 
-
-%% Comparing DFG sweeps across concentration
-ftir = importdata('../2024_11_08_PK/Rh800FTIR.txt'); % 100 mM
-
-sweep1 = importdata('../2024_11_08_PK/Rh800_100uM_DMSO.txt');
-sweep2 = importdata('../2024_11_08_PK/Rh800_100uM_DMSOd6.txt');
-sweep3 = importdata('../2024_11_08_PK/Rh800_10mM_DMSOd6.txt');
-sweep4 = importdata('Rh800_1mM_DMSO.txt');
-sweep5 = importdata('Rh800_5mM_DMSO.txt');
-
-dfgx = 1200:0.1:1700; dfgx = dfgx.';
-fit1 = 0.990949.*exp(-log(2).*((dfgx-1503.19)./7.7014).^2) + 0.605264.*exp(-log(2).*((dfgx-1299.38)./11.1877).^2) + 0.608035.*exp(-log(2).*((dfgx-1593.43)./11.0338).^2) + 0.0314319.*exp(-log(2).*((dfgx-1545)./3.85751).^2) + 0.0216712.*exp(-log(2).*((dfgx-1644)./22.2586).^2) + 0.121801.*exp(-log(2).*((dfgx-1359.39)./13.6445).^2) + 0.0998971.*exp(-log(2).*((dfgx-1517.9)./-28.627).^2) + 3.12987 + -0.0070507.*dfgx + 5.78929e-06.*dfgx.^2 + -2.01414e-09.*dfgx.^3 + 2.43243e-13.*dfgx.^4 + 0.00488719.*exp(-log(2).*((dfgx-1440)./11.4528).^2) + 0.0271189.*exp(-log(2).*((dfgx-1375.92)./4.68311).^2);
-fit2 = 0.0481952.*exp(-log(2).*((dfgx-1639.61)./26.5997).^2) + 0.0896067.*exp(-log(2).*((dfgx-1361.96)./13.3531).^2) + 0.0577641.*exp(-log(2).*((dfgx-1549.71)./19.9967).^2) + 0.521063.*exp(-log(2).*((dfgx-1595.27)./11.2959).^2) + 0.0355791.*exp(-log(2).*((dfgx-1379.03)./-6.49645).^2) + -182.26 + 0.800015.*dfgx + -0.0014511.*dfgx.^2 + 1.39259e-06.*dfgx.^3 + -7.45734e-10.*dfgx.^4 + 2.11222e-13.*dfgx.^5 + -2.4711e-17.*dfgx.^6 + Voigt(0.991001, 1505.5, 7.54469, 12.8385, dfgx) + Voigt(0.584247, 1303.49, 14.6412, 7.03501, dfgx) + 0.033246.*exp(-log(2).*((dfgx-1434.96)./17.7176).^2);
-fit3 = Voigt(1.05095, 1507.07, 21.6504, 2.38147, dfgx) + Voigt(0.891355, 1598.4, 14.4727, 11.4639, dfgx) + Voigt(0.324928, 1306.02, 0.260261, 16.9701, dfgx) + 0.109586.*exp(-log(2).*((dfgx-1651.12)./15.1177).^2) + 0.0579303.*exp(-log(2).*((dfgx-1366.01)./18.5261).^2) + 0.0158839.*exp(-log(2).*((dfgx-1385.85)./7.63218).^2) + 0.0654993.*exp(-log(2).*((dfgx-1441.93)./27.078).^2) + 0.131521 + -2.72222e-06.*dfgx + -5.40692e-08.*dfgx.^2 + -3.76921e-11.*dfgx.^3 + -1.30336e-14.*dfgx.^4 + 4.29016e-18.*dfgx.^5 + 1.22299e-20.*dfgx.^6 + Voigt(0.121866, 1545, 32.53, 0.000467972, dfgx);
-fit4 = Voigt(1.0674, 1505.51, 0.0930513, 14.0485, dfgx) + Voigt(0.441755, 1597.08, 21.1687, 0.00035926, dfgx) + 0.0423159.*exp(-log(2).*((dfgx-1545.55)./6.17397).^2) + 0.0200349.*exp(-log(2).*((dfgx-1649.92)./5.69079).^2) + 12.7511 + -0.0126132.*dfgx + -2.80273e-06.*dfgx.^2 + 2.59984e-09.*dfgx.^3 + 1.7874e-12.*dfgx.^4 + -2.04664e-16.*dfgx.^5 + -3.31529e-19.*dfgx.^6;
-fit5 = Voigt(1.13126, 1506.54, 0.0678335, 14.7557, dfgx) + Voigt(0.509186, 1598.66, 19.5139, 1.92131, dfgx) + 0.0404514.*exp(-log(2).*((dfgx-1546.74)./5.24378).^2) + 0.0343428.*exp(-log(2).*((dfgx-1652.44)./8.53399).^2) + 0.129557.*exp(-log(2).*((dfgx-1417.89)./36.0042).^2) + -4.41523 + 0.0010647.*dfgx + 2.01679e-06.*dfgx.^2 + 7.61915e-10.*dfgx.^3 + -4.36319e-13.*dfgx.^4 + -5.92177e-16.*dfgx.^5 + 2.11148e-19.*dfgx.^6;
-
-sweepx = zeros(143,5); sweepy = sweepx;
-sweepx(1:height(sweep1),1) = sweep1(:,1);
-sweepx(1:height(sweep2),2) = sweep2(:,1);
-sweepx(1:height(sweep3),3) = sweep3(:,1);
-sweepx(1:height(sweep4),4) = sweep4(:,1);
-sweepx(1:height(sweep5),5) = sweep5(:,1);
-sweepy(1:height(sweep1),1) = sweep1(:,2);
-sweepy(1:height(sweep2),2) = sweep2(:,2);
-sweepy(1:height(sweep3),3) = sweep3(:,2);
-sweepy(1:height(sweep4),4) = sweep4(:,2);
-sweepy(1:height(sweep5),5) = sweep5(:,2);
-fits = [fit1 fit2 fit3 fit4 fit5];
-
-figure; hold on; box on;
-area(ftir(:,1),ftir(:,2)./1.48569,'FaceColor',[0.5 0.5 0.5],'EdgeAlpha',0,'FaceAlpha',0.7);
-for i=1:width(fits)
-    [linecolor,marker,marksize] = colormarkset(i,width(fits),'fire');
-    plot([-1 -1],[-1 -1],'-o','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
-end
-legend('FTIR','100 μM DMSO','100 μM DMSO-d_6','10 mM DMSO-d_6','1 mM DMSO','5 mM DMSO');
-lg = legend; lg.Box = 'off'; lg.AutoUpdate = 'off';
-for i=1:width(fits)
-    [linecolor,marker,marksize] = colormarkset(i,width(fits),'fire');
-    currentfit = fits(:,i);
-    plot(sweepx(:,i),sweepy(:,i)./max(currentfit),'o','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
-    plot(dfgx,fits(:,i)./max(currentfit),'-','Color',linecolor,'LineWidth',2);
-end
-xlabel('IR frequency (cm^{–1})'); ylabel('Normalized BonFIRE');
-ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
-xlim([1420 1700]); ylim([-0.05 1.05]);
-pbaspect([1.5 1 1]);
-
-
-conc = [0.1 0.1 1 5 10];
-peak = [1593.43 1595.27 1597.08 1598.66 1598.4];
-
-figure; plot(conc,peak,'o');
-xlabel('[Rh800] (mM)'); ylabel('Mode 134 frequency (cm^{–1})');
 
 %% Pairwise comparisons
 statcomparison = 0;
@@ -1908,10 +1877,10 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
             CURRLTFITTYPE = 1; % monoexponential
         else % not carbonyl
             if IRWNum < 2400 && IRWNum > 2000 % triple bond
-                if PROBE < 520 && PROBE > 510 % 515.6 nm
-                    CURRLTFITTYPE = 2; % biexponential (Coumarin 337 nitrile)
+                if PROBE < 520 && PROBE > 390 % 515.6 nm or 400 nm
+                    CURRLTFITTYPE = 2; % biexponential (Coumarin 337 nitrile or small cyanocoumarin)
                 else
-                    CURRLTFITTYPE = 1; % monoexponential (normal)
+                    CURRLTFITTYPE = 1; % monoexponential (normal probe)
                 end
             else % double bond or CH
                 if (IRWNum == 1300 || IRWNum == 1500 || IRWNum == 1590) && PROBE < 770 && PROBE > 690
@@ -1981,7 +1950,7 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
             heaviside(tc).*(r(8)*exp(-(tc)./r(9))+r(10)*exp(-((tc)./(r(11))).^r(12)))) - SIGINT;
         % Initial guesses
         r0 = [BASEFIT,0,2.6,... % basecoefs, IRF center (ps), IRF width (ps)
-            1,1,0.02,10,1]; % amp 1, τ1 (ps), amp 2, τ2 (ps), β (stretch)
+            4.5,1,1.5,10,1]; % amp 1, τ1 (ps), amp 2, τ2 (ps), β (stretch)
         % Float baseline coeffs
         newlbbase = BASEFIT; newubbase = BASEFIT;
         for i=1:length(BASEFIT)
@@ -1997,11 +1966,11 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
         lb = [newlbbase,-10,1*sqrt(2),... % basecoefs, IRF center (ps), IRF min (ps)
             0,0.1,... % amp 1, τ1min (ps)
             0,0.1,... % amp 2, τ2min (ps)
-            1e-2]; % β min
+            0.1]; % β min
         ub = [newubbase,20,3*sqrt(2),... % basecoefs, IRF center (ps), IRF max (ps)
             10*SIGPEAK,100,... % amp 1, τ1max (ps)
             10*SIGPEAK,100,... % amp 2, τ2max (ps)
-            1e2]; % β max
+            1.8]; % β max
         % Implement fit type options
         if CURRLTFITTYPE == 1 % Gauss*monoexp
             lb(10) = 0; ub(10) = 0; % first exp only
@@ -2777,5 +2746,72 @@ function [ERROR] = ltfiterror(LIFETIME,SNR)
     currentaccuracy = fitacc(ltind,snrind);
     currenterror = 1-currentaccuracy; % relative error
     ERROR = currenterror*LIFETIME; % absolute error
+    return
+end
+
+% Comparing time delay sweeps
+function NORMSIG = normsweep(SIGNAL)
+%%% This function background-subtracts and normalizes a vector.
+    
+    NORMSIG = (SIGNAL-min(SIGNAL))./(max(SIGNAL)-min(SIGNAL));
+    return
+end
+
+% Time delay sweep comparison
+function tcompare(TIME,SIG,NAMES,COLORMAP,OPTION)
+%%% This function overlays a series of time sweeps in a new figure.
+    
+    % Make sure TIME is a row vector
+    if length(TIME) == height(TIME)
+        TIME = TIME.';
+    end
+    % Check if TIME and SIG match dimensions
+    if width(TIME) ~= width(SIG) % if mismatched
+        if width(TIME) == height(SIG) % SIG is flipped
+            SIG = SIG.';
+        else % trim SIG to match
+            SIG = SIG(:,1:length(TIME));
+            warning('Dimensions mismatched - signal matrix trimmed to match.');
+        end
+    end
+
+    if isempty(COLORMAP)
+        COLORMAP = 'fire';
+    end
+    figure; hold on; box on;
+    for i=1:height(SIG)
+        [LINECOLOR,MARKER,MARKSIZE] = colormarkset(i,height(SIG),COLORMAP);
+        plot([-1 -1],[-1 -1],'Marker',MARKER,'MarkerSize',MARKSIZE,'Color',LINECOLOR,'LineWidth',2);
+    end
+    if ~isempty(NAMES)
+        legend(NAMES); lg = legend; lg.Box = 'off'; lg.AutoUpdate = 'off';
+    end
+    for i=1:height(SIG)
+        [LINECOLOR,MARKER,MARKSIZE] = colormarkset(i,height(SIG),COLORMAP);
+        if height(TIME) == height(SIG)
+            t = TIME(i,:);
+        else
+            t = TIME(1,:);
+        end
+        if strcmp(OPTION,'normalize')
+            signal = normsweep(SIG(i,:));
+            ymax = 1.05; ystring = 'Normalized BonFIRE';
+        else
+            signal = SIG(i,:);
+            ymax = Inf; ystring = 'BonFIRE (AU)';
+        end
+        [TFIT,FITCURVE] = basicltfit(t,signal,2);
+        [~,MAXIND] = max(FITCURVE);
+        offset = TFIT(MAXIND);
+        if strcmp(OPTION,'normalize')
+            signal = (signal-min(FITCURVE))./(max(FITCURVE)-min(FITCURVE));
+            FITCURVE = (FITCURVE-min(FITCURVE))./(max(FITCURVE)-min(FITCURVE));
+        end
+        plot(t-offset,signal,'o','Marker',MARKER,'MarkerSize',MARKSIZE,'Color',LINECOLOR,'LineWidth',2);
+        plot(TFIT-offset,FITCURVE,'-','Color',LINECOLOR,'LineWidth',3);
+    end
+    xlabel('Time delay (ps)'); ylabel(ystring);
+    xlim([min(TIME,[],'all') max(TIME,[],'all')]); ylim([-0.05 ymax]);
+    ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
     return
 end
