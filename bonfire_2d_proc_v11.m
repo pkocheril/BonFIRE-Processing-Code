@@ -10,10 +10,11 @@
 % function, added pkfit and Voigt functions, updated colors, added 
 % monoexponential error estimation
 %%% v9 - bug fixes
-%%% v10 - added tcompare and normalize functions to stack time delay sweeps
+%%% v10 - added tcompare and normsweep functions to stack time delay sweeps
+%%% v11 - added pkfitnt function for BF+NDR-TPA Fano fitting
 
 % Initialize
-% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_12_03_PK/'
+cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_03_PK/'
 clear; clc; close all;
 
 % Main configuration options
@@ -1217,6 +1218,8 @@ IRpowers = prb; prbpowers = prb; noise = prb; dcsbr = prb; modfr = prb;
 pkht = NaN(maxfiles,length(subset));
 csig = NaN(height(wIR),width(time),length(subset)); rawsig = csig;
 csiga = NaN(height(prb),width(timealign),length(subset));
+ch1sig = csig;
+snr = prb; snrv2 = prb; srr = prb;
 
 % Pulling data
 for i=subset % folder
@@ -1242,6 +1245,9 @@ for i=subset % folder
         dcsbr(j,i) = summary.(sf{i}).('file'+string(j)).ch1summary.sbr;
         modfr(j,i) = summary.(sf{i}).('file'+string(j)).parameters.modfreq;
         ch1sig(j,1:tlength,i) = summary.(sf{i}).('file'+string(j)).ch1data.corrsig;
+        snr(j,i) = summary.(sf{i}).('file'+string(j)).summary.snr;
+        snrv2(j,i) = summary.(sf{i}).('file'+string(j)).summary.snrv2;
+        srr(j,i) = summary.(sf{i}).('file'+string(j)).fit.srr;
     end
 end
 
@@ -1254,7 +1260,7 @@ tD = time(1,:);
 if max(ismember(analysistype,2)) % plotting contours
     for i=subset
         nfiles = summary.(sf{i}).nfiles;
-        if isscalar((unique(rmmissing(nonzeros(prb(:,i)))))) % no probe tuning --> IR sweep
+        if isscalar(unique(rmmissing(nonzeros(round(prb(:,i)./10))))) % no probe tuning --> IR sweep
             xstring = 'Time delay (ps)';
             ystring = 'ω_{IR} (cm^{-1})';
             w1 = wIR(1:nfiles,i);
@@ -1374,7 +1380,8 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     legend(ltlegend);
     % τ2
     nexttile([1 2]); hold on;
-    for i=1:length(subset)
+    for j=1:length(subset)
+        i = subset(j);
         [linecolor,marker,marksize] = colormarkset(i,length(subset),[]);
         plot(xdata,lt2(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
@@ -1383,11 +1390,12 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     legend(ltlegend);
     % A1/A2
     nexttile([2 1]); hold on;
-    for i=1:length(subset)
+    for j=1:length(subset)
+        i = subset(j);
         [linecolor,marker,marksize] = colormarkset(i,length(subset),[]);
         plot(xdata,ltr(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
-    set(gca,'Yscale','log');
+    % set(gca,'Yscale','log');
     xlabel(label); ylabel('A_{1}/A_{2}');
     xlim([min(xdata) max(xdata)]); ylim([1e-2 1e2]); 
     legend(ltlegend);
@@ -1399,32 +1407,38 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
     for i=subset
         nfiles = summary.(sf{i}).nfiles;
         sigmatrix = csig(1:nfiles,:,i);
-        if isscalar((unique(rmmissing(nonzeros(prb(:,i)))))) % no probe tuning --> IR sweep
+        if isscalar(unique(rmmissing(nonzeros(round(prb(:,i)./10))))) % no probe tuning --> IR sweep
             xstring = 'ω_{IR} (cm^{-1})';
             w1 = wIR(1:nfiles,i);
             w2 = prb(1:nfiles,i);
             nonswept = string(round(w2(1)))+' nm';
             sumfreq = 1e7./w2+w1;
-            % Color setup
-            if min(w1) > 2000 % idler sweep
-                startcolor = [0 0.35 0.5]; % turquoise
-                endcolor = [0.8 0.2 0.2]; % red
-                npeaks = 1;
-            else % DFG sweep
-                startcolor = [0.5 0 0.5]; % purple
-                endcolor = [0.2 0.8 0.2]; % green
-                npeaks = 4;
-            end
             % Sorting
             t1 = time(i,:);
             [t1,tind] = sort(t1);
             [w1,wind] = sort(w1);
             sigmatrix = sigmatrix(wind,tind);
-            % Fitting
             xval = w1; yval = max(sigmatrix,[],2); yval = yval./max(yval);
-            [gx,gy,soln,fwhms] = pkfit(xval,yval,npeaks,4,'positive'); % 1 (idler) or 4 (DFG) Gaussians, polynomial background
-            peakfits.('folder'+string(i)).center = soln(8);
-            peakfits.('folder'+string(i)).amp = soln(6);
+            % Separate setup
+            if min(w1) > 2000 % idler sweep -- Gauss+Fano
+                startcolor = [0 0.35 0.5]; % turquoise
+                endcolor = [0.8 0.2 0.2]; % red
+                [gx,gy,soln,fwhms] = pkfitnt(xval,yval);
+                peakfits.('folder'+string(i)).center = soln(5);
+                peakfits.('folder'+string(i)).amp = soln(3);
+                peakfits.('folder'+string(i)).bftpa = soln(3)./soln(2);
+                % % Check Fano fitting
+                % figure; hold on; plot(xval,yval,'o'); plot(gx,soln(1)+soln(2)*gx,'--')
+                % plot(gx,soln(1)+soln(2)*gx+soln(6).*((soln(7).*soln(8)+gx-soln(5)).^2)./(soln(8).^2+(gx-soln(5)).^2),'--'); plot(gx,gy,'--');
+            else % DFG sweep
+                startcolor = [0.5 0 0.5]; % purple
+                endcolor = [0.2 0.8 0.2]; % green
+                npeaks = 4;
+                % Fitting
+                [gx,gy,soln,fwhms] = pkfit(xval,yval,npeaks,4,'positive'); % DFG sweep -- 4Gauss+polynomial
+                peakfits.('folder'+string(i)).center = soln(8);
+                peakfits.('folder'+string(i)).amp = soln(6);
+            end
             peakfits.('folder'+string(i)).fwhms = fwhms;
             peakfits.('folder'+string(i)).fitvector = soln;
         else % probe sweep
@@ -1474,7 +1488,9 @@ if max(ismember(analysistype,5)) % peak overlay
     'SelectionMode','multiple','ListString',subfolders(targetfolders));
     overleg = subfolders(targetfolders(overset));
     figure; hold on; box on; % overlay figure
-    if max(ismember(analysistype,6)) % lifetime-weighted spectra
+
+    % Lifetime-weighted spectra
+    if max(ismember(analysistype,6))
         tiledlayout(3,1); nexttile([2 1]); hold on;
         % Make legend
         for j=1:length(overset)
@@ -1490,8 +1506,11 @@ if max(ismember(analysistype,5)) % peak overlay
             % Decide color and markers
             [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
             ltwt = lt1(:,i).*pkht(:,i);
+            [maxwt,maxltind] = max(ltwt);
+            peakfits.('folder'+string(i)).ltweighted.maxlt = lt1(maxltind,i); % lifetime at peak of lt-weighted sweep
+            peakfits.('folder'+string(i)).ltweighted.maxsrr = srr(maxltind,i); % SRR at peak of lt-weighted sweep
             % Fitting
-            xval = wIR(:,i); yval = ltwt./max(ltwt);
+            xval = wIR(:,i); yval = ltwt./maxwt;
             [gx,gy,soln,fwhms] = pkfit(xval,yval,1,2,'positive');
             peakfits.('folder'+string(i)).ltweighted.xval = xval;
             peakfits.('folder'+string(i)).ltweighted.yval = yval;
@@ -1510,7 +1529,8 @@ if max(ismember(analysistype,5)) % peak overlay
         ax = gca; ax.FontSize = 15;
         nexttile([1 1]); hold on;
     end
-    % Regular plot
+    
+    % Regular spectra
     for j=1:length(overset)
         % Make legend
         i = overset(j);
@@ -2749,7 +2769,7 @@ function [ERROR] = ltfiterror(LIFETIME,SNR)
     return
 end
 
-% Comparing time delay sweeps
+% Normalize a signal
 function NORMSIG = normsweep(SIGNAL)
 %%% This function background-subtracts and normalizes a vector.
     
@@ -2813,5 +2833,65 @@ function tcompare(TIME,SIG,NAMES,COLORMAP,OPTION)
     xlabel('Time delay (ps)'); ylabel(ystring);
     xlim([min(TIME,[],'all') max(TIME,[],'all')]); ylim([-0.05 ymax]);
     ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
+    return
+end
+
+% Fitting cell-silent BonFIRE spectra with a Fano fit for NDR-TPA
+function [NX,NY,SOLN,FWHM] = pkfitnt(XVAL,YVAL)
+%%% This function fits y(x) to a Gaussian with a linear background and a
+% Fano resonance.
+    
+    % Ensure column vectors
+    if length(XVAL) == width(XVAL)
+        XVAL = XVAL.';
+    end
+    if length(YVAL) == width(YVAL)
+        YVAL = YVAL.';
+    end
+    % Make sure lengths match
+    if length(XVAL) ~= length(YVAL)
+        if length(XVAL) < length(YVAL) % YVAL is longer
+            YVAL = YVAL(1:length(XVAL));
+        else % XVAL is longer
+            XVAL = XVAL(1:length(YVAL));
+        end
+    end
+
+    % Set up fitting function
+    fn = @(x) x(1)+x(2)*XVAL+... % linear baseline
+        x(3).*exp(-x(4).*(XVAL-x(5)).^2)+... % Gaussian (BonFIRE)
+        x(6).*((x(7).*x(8)+XVAL-x(5)).^2)./(x(8).^2+(XVAL-x(5)).^2)+... % Fano (NDR-TPA)
+        -1.*YVAL;
+    
+    % Set options
+    opt=optimoptions(@lsqnonlin);
+    opt.MaxFunctionEvaluations = 1e6; % let the fit run longer
+    opt.MaxIterations = 1e6; % let the fit run longer
+    opt.FunctionTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
+    opt.OptimalityTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
+    opt.StepTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more precise
+    opt.Display = 'off'; % silence console output
+    
+    [~,maxind] = max(YVAL);
+
+    % Set initial guesses
+    x0 = [-1 (YVAL(end)-YVAL(1))./(XVAL(end)-XVAL(1))  ...
+        0.6148 0.0096 XVAL(maxind) ...
+        -1 .44 10];
+    lb = [-Inf 0 ...
+        0  0.0025 -Inf ... % 0.0025 --> max FWHM = 33.3 cm-1
+        -1 0 0];
+    ub = [Inf Inf ...
+        Inf 0.04 Inf ... % 0.04 --> min FWHM = 8.3 cm-1
+        0 3 10];
+    
+    % Calculate fit
+    SOLN = lsqnonlin(fn,x0,lb,ub,opt);
+    FWHM = 2*sqrt(2*log(2))*(sqrt(1./(2*SOLN(4))));
+    
+    % Calculate function for plotting
+    NX = min(XVAL):0.1:max(XVAL);
+    NY = SOLN(1)+SOLN(2)*NX+SOLN(3).*exp(-SOLN(4).*(NX-SOLN(5)).^2)+...
+        SOLN(6).*((SOLN(7).*SOLN(8)+NX-SOLN(5)).^2)./(SOLN(8).^2+(NX-SOLN(5)).^2);
     return
 end
