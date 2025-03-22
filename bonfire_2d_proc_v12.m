@@ -12,9 +12,10 @@
 %%% v9 - bug fixes
 %%% v10 - added tcompare and normsweep functions to stack time delay sweeps
 %%% v11 - added pkfitnt function for BF+NDR-TPA Fano fitting
+%%% v12 - fixed SBR calculation and updated .tif saving function
 
 % Initialize
-cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_03_PK/'
+% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_03_PK/'
 clear; clc; close all;
 
 % Main configuration options
@@ -31,8 +32,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 1; % 1 = write batch processed files, 0 = not
-writefigsyn = 1; % 1 = write figure files, 0 = not
+writeprocyn = 0; % 1 = write batch processed files, 0 = not
+writefigsyn = 0; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -1812,7 +1813,7 @@ function [BASECURVE,BLEACHRATE,BASEFIT,LBBASE,UBBASE,SBR,CORRSIG,CORRSIGBASE,TBA
     end
     TBASE = [T(startbase:ilow); T(ihigh:end)]; % trimmed t
     SIGBASE = [SIGNAL(startbase:ilow); SIGNAL(ihigh:end)]; % trimmed signal
-    SBR = max(SIGNAL(ilow:ihigh))/mean(SIGNAL(ihigh:end));
+    SBR = (max(SIGNAL(ilow:ihigh))-mean(SIGNAL(ihigh:end)))/mean(SIGNAL(ihigh:end));
     % Baseline fitting
     if CURRBASEFITTYPE == 0 % no baseline fitting, set basecurve to 0
         BASECURVE = zeros(height(T),width(T));
@@ -2506,79 +2507,32 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     return
 end
 
-% Write tif (from HW)
-function Save_tif(name, A, B, C, D, E)
-%%% This function writes up to five matrices into a hyperstack .tif file.
-    if ~isempty(A)
-        tiffObject = Tiff(name, 'w');
-        tagstruct.ImageLength = size(A,1);
-        tagstruct.ImageWidth = size(A,2);
-        tagstruct.Compression = Tiff.Compression.None;
-        tagstruct.SampleFormat = Tiff.SampleFormat.IEEEFP;
-        tagstruct.Photometric = Tiff.Photometric.MinIsBlack;
-        tagstruct.BitsPerSample = 64;
-        tagstruct.SamplesPerPixel = size(A, 3);
-        tagstruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-        tiffObject.setTag(tagstruct);
-        tiffObject.write(A);
-        tiffObject.close;
+% Save_tif v2 (from HW)
+function Save_tif(fname, imageStack, sliceLabels)
+%%% This function writes a 3D array into a hyperstack .tif file.
+
+    TIF = Tiff(fname, 'w');
+    for k = 1:size(imageStack, 3)
+        % Set TIFF tags for floating-point storage
+        tagStruct.ImageLength = size(imageStack, 1);
+        tagStruct.ImageWidth = size(imageStack, 2);
+        tagStruct.Photometric = Tiff.Photometric.MinIsBlack;
+        tagStruct.BitsPerSample = 64; % 64-bit double precision
+        tagStruct.SamplesPerPixel = 1;
+        tagStruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
+        tagStruct.SampleFormat = Tiff.SampleFormat.IEEEFP; % Floating-point format
+        tagStruct.Software = 'MATLAB';
+        % Set tags and write the slice
+        if ~isempty(sliceLabels)
+          tagStruct.PageName = sliceLabels{k};
+        end
+        TIF.setTag(tagStruct);
+        TIF.write(imageStack(:, :, k));
+        if k < size(imageStack, 3)
+           TIF.writeDirectory(); % Create a new directory for the next slice
+        end
     end
-    if ~isempty(B)
-        tiffObject = Tiff(name, 'a');
-        tagstruct.ImageLength = size(B,1);
-        tagstruct.ImageWidth = size(B,2);
-        tagstruct.Compression = Tiff.Compression.None;
-        tagstruct.SampleFormat = Tiff.SampleFormat.IEEEFP;
-        tagstruct.Photometric = Tiff.Photometric.MinIsBlack;
-        tagstruct.BitsPerSample = 64;
-        tagstruct.SamplesPerPixel = size(B, 3);
-        tagstruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-        tiffObject.setTag(tagstruct);
-        tiffObject.write(B);
-        tiffObject.close;
-    end
-    if ~isempty(C)
-        tiffObject = Tiff(name, 'a');
-        tagstruct.ImageLength = size(C,1);
-        tagstruct.ImageWidth = size(C,2);
-        tagstruct.Compression = Tiff.Compression.None;
-        tagstruct.SampleFormat = Tiff.SampleFormat.IEEEFP;
-        tagstruct.Photometric = Tiff.Photometric.MinIsBlack;
-        tagstruct.BitsPerSample = 64;
-        tagstruct.SamplesPerPixel = size(C, 3);
-        tagstruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-        tiffObject.setTag(tagstruct);
-        tiffObject.write(C);
-        tiffObject.close;
-    end
-    if ~isempty(D)
-        tiffObject = Tiff(name, 'a');
-        tagstruct.ImageLength = size(D,1);
-        tagstruct.ImageWidth = size(D,2);
-        tagstruct.Compression = Tiff.Compression.None;
-        tagstruct.SampleFormat = Tiff.SampleFormat.IEEEFP;
-        tagstruct.Photometric = Tiff.Photometric.MinIsBlack;
-        tagstruct.BitsPerSample = 64;
-        tagstruct.SamplesPerPixel = size(D, 3);
-        tagstruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-        tiffObject.setTag(tagstruct);
-        tiffObject.write(D);
-        tiffObject.close;
-    end
-    if ~isempty(E)
-        tiffObject = Tiff(name, 'a');
-        tagstruct.ImageLength = size(E,1);
-        tagstruct.ImageWidth = size(E,2);
-        tagstruct.Compression = Tiff.Compression.None;
-        tagstruct.SampleFormat = Tiff.SampleFormat.IEEEFP;
-        tagstruct.Photometric = Tiff.Photometric.MinIsBlack;
-        tagstruct.BitsPerSample = 64;
-        tagstruct.SamplesPerPixel = size(E, 3);
-        tagstruct.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-        tiffObject.setTag(tagstruct);
-        tiffObject.write(E);
-        tiffObject.close;
-    end
+    TIF.close();
     return
 end
 
