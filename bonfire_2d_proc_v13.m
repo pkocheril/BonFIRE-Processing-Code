@@ -13,13 +13,19 @@
 %%% v10 - added tcompare and normsweep functions to stack time delay sweeps
 %%% v11 - added pkfitnt function for BF+NDR-TPA Fano fitting
 %%% v12 - fixed SBR calculation and updated .tif saving function
+%%% v13 - updated post-batch analysis and added config presets,
+% FFT function, and function for stitching BonFIRE spectra together
 
 % Initialize
-% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_03_PK/'
+% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_25_PK/'
 clear; clc; close all;
 
+% Configuration presets
+preconfig = 0; % 0 = none (set manually), 1 = full analysis,
+% 2 = test run, 3 = full analysis but no fitting, 4 = load previous
+
 % Main configuration options
-loadprevious = []; % [] = auto-detect, 0 = new analysis, 
+loadprevious = []; % [] = auto-detect, 0 = new analysis,
 % 1 = load individual .dats, 2 = read structure.xml, 3 = re-process partial
 runtype = 2; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
@@ -32,8 +38,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 0; % 1 = write batch processed files, 0 = not
-writefigsyn = 0; % 1 = write figure files, 0 = not
+writeprocyn = 1; % 1 = write batch processed files, 0 = not
+writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -76,6 +82,23 @@ testfilesperfolder = 1; % number of files to test per folder (default 1)
 workingdirectory = pwd; % get working directory path
 directorycontents = dir(fullfile(workingdirectory,'*')); % search working directory
 subfolders = setdiff({directorycontents([directorycontents.isdir]).name},{'.','..'}); % subfolders of working directory
+
+% Apply config preset
+if preconfig > 0
+    if preconfig == 1 % new full analysis
+        loadprevious = 0; runtype = 0; ltfittype = []; writeprocyn = 1; writefigsyn = 1;
+    end
+    if preconfig == 2 % test run
+        loadprevious = 0; runtype = 2; ltfittype = []; writeprocyn = 0; writefigsyn = 0;
+    end
+    if preconfig == 3 % full analysis but no fitting
+        loadprevious = 0; runtype = 0; ltfittype = 0; writeprocyn = 0; writefigsyn = 0;
+    end
+    if preconfig == 4 % load previous
+        loadprevious = []; runtype = 0; ltfittype = []; writeprocyn = 1; writefigsyn = 1;
+    end
+end
+
 
 if isempty(loadprevious) % auto-detect previous analysis
     guessxml = fullfile(workingdirectory,'summarystructure.xml');
@@ -1172,6 +1195,7 @@ xaxischoice = 0; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 % 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
 logcontour = 0; % 0 = linear scale, 1 = log scale
 subset = []; % [] = dialog, targetfolders = run all
+chooseoverlay = 0; % 1 = choose folders for overlay, 0 = overlay all
 plotfits = 0; % 1 = show individual peak fits, else don't
 updatesummary = 0; % 1 = update summary structure, 0 = don't
 
@@ -1485,8 +1509,12 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
 end
 
 if max(ismember(analysistype,5)) % peak overlay
-    [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
-    'SelectionMode','multiple','ListString',subfolders(targetfolders));
+    if chooseoverlay == 1
+        [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
+        'SelectionMode','multiple','ListString',subfolders(targetfolders));
+    else
+        overset = targetfolders(subset);
+    end
     overleg = subfolders(targetfolders(overset));
     figure; hold on; box on; % overlay figure
 
@@ -1553,9 +1581,14 @@ if max(ismember(analysistype,5)) % peak overlay
         yval = peakfits.('folder'+string(i)).yval;
         gx = peakfits.('folder'+string(i)).xfit;
         gy = peakfits.('folder'+string(i)).yfit;
-        plot(xval,yval./max(gy),marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
+        if max(gy) > max(yval)
+            yval = yval./max(gy); gy = gy./max(gy);
+        else
+            gy = gy./max(yval); yval = yval./max(yval);
+        end
+        plot(xval,yval,marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
         % Plot fits
-        plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
+        plot(gx,gy,'LineWidth',3,'Color',linecolor);
         % Figure out bounds
         if isempty(xl1) || min(xval) < xl1
             xl1 = min(xval);
@@ -1571,18 +1604,32 @@ if max(ismember(analysistype,7)) % Tsweep comparison
     for i=1:length(subset)
         j = targetfolders(subset(i));
         nfiles = summary.('folder'+string(j)).nfiles;
-        sigmat = squeeze(csig(1:nfiles,:,i));
-        if i == 3 || i == 5 || i == 10 % mod freq sweep
-            [sortmod,sortinds] = sort(modfr(1:nfiles,i));
-            leg = string(round(sortmod)./1000)+' kHz';
-            colormap = 'rainbow';
-        else % power sweep
-            [sortmod,sortinds] = sort(IRpowers(1:nfiles,i));
-            leg = string(round(10*sortmod)./10)+' mW';
-            colormap = [];
+        if nfiles > 30
+            fileset = 1:5:nfiles;
+        else
+            fileset = 1:nfiles;
         end
-        timelength = length(rmmissing(time(i,:)));
-        tcompare(time(i,1:timelength),sigmat(sortinds,1:timelength),leg,colormap,'normalize');
+        sigmat = squeeze(csig(fileset,:,j));
+        % Guess sweep type
+        if ~isscalar(unique(rmmissing(nonzeros(round(prb(1:nfiles,j)./10))))) % probesweep
+            [sortmod,sortinds] = sort(prb(fileset,j));
+            leg = string(round(10*sortmod)./10)+' nm';
+        else
+            if ~isscalar(unique(rmmissing(nonzeros(round(wIR(1:nfiles,j)./10))))) % IR sweep
+                [sortmod,sortinds] = sort(wIR(fileset,j));
+                leg = string(round(10*sortmod)./10)+' cm^{–1}';
+            else
+                if ~isscalar(unique(rmmissing(nonzeros(round(IRpowers(1:nfiles,j)./10))))) % power sweep
+                    [sortmod,sortinds] = sort(IRpowers(fileset,j));
+                    leg = string(round(10*sortmod)./10)+' mW';
+                else % guess modulation frequency sweep
+                    [sortmod,sortinds] = sort(modfr(fileset,j));
+                    leg = string(round(sortmod)./1000)+' kHz';
+                end
+            end
+        end
+        timelength = length(rmmissing(time(j,:)));
+        tcompare(time(j,1:timelength),sigmat(sortinds,1:timelength),leg,[],'normalize');
         title(summary.('folder'+string(j)).foldername);
     end
 end
@@ -1639,7 +1686,14 @@ if statcomparison == 1
     ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
 
     % Example Voigt plotting
-    [voigty,voigtx] = Voigt(1,1,1,1,1:0.1:500);
+    [voigty1,voigtx1] = Voigt(1,1,1,1,1:0.1:500);
+    [voigty2,voigtx2] = VoigtOrig(1,1,1,1,1:0.1:500);
+
+    % Example stitching
+    [xstitch,ystitch] = bfstitch(1:10,1:10,12:20,12:20);
+
+    % Example FFT
+    [fftx,ffty] = fftfn(xstitch,ystitch);
 end
 
 
@@ -2537,7 +2591,7 @@ function Save_tif(fname, imageStack, sliceLabels)
 end
 
 % Create a Voigt lineshape for plotting
-function [VOIGTY,VOIGTX] = Voigt(HEIGHT,CENTER,GFWHM,LFWHM,X)
+function [VOIGTY,VOIGTX] = VoigtOrig(HEIGHT,CENTER,GFWHM,LFWHM,X)
 %%% This function creates a Voigt lineshape (x and y vectors) for an
 % input height, center, Gaussian FWHM, Lorentzian FWHM, and x vector.
 % X must be odd in length for VOIGTX to equal X.
@@ -2847,5 +2901,141 @@ function [NX,NY,SOLN,FWHM] = pkfitnt(XVAL,YVAL)
     NX = min(XVAL):0.1:max(XVAL);
     NY = SOLN(1)+SOLN(2)*NX+SOLN(3).*exp(-SOLN(4).*(NX-SOLN(5)).^2)+...
         SOLN(6).*((SOLN(7).*SOLN(8)+NX-SOLN(5)).^2)./(SOLN(8).^2+(NX-SOLN(5)).^2);
+    return
+end
+
+
+% Ensure column vectors
+function X = ensurecolumn(X)
+% This function ensures that an input vector is a column vector.
+
+    if length(X) == width(X)
+        X = X.';
+    end
+    
+    return
+end
+
+% Make sure lengths match
+function [X,Y] = lengthmatch(X,Y)
+%%% This function ensures that two vectors are the same length (longer
+% vector is trimmed if there's a mismatch).
+
+    if length(X) ~= length(Y)
+        if length(X) < length(Y) % Y is longer
+            Y = Y(1:length(X)); % Y trimmed to length(X)
+        else % X is longer
+            X = X(1:length(Y)); % X trimmed to length(Y)
+        end
+    end
+    
+    return
+end
+
+% Stitch together BonFIRE spectra
+function [XSTITCH,YSTITCH] = bfstitch(XVAL1,YVAL1,XVAL2,YVAL2)
+%%% This function stitches together two parts of a BonFIRE spectrum.
+% (leaves YVAL1 intensities unchanged)
+
+    % Ensure column vectors
+    XVAL1 = ensurecolumn(XVAL1); XVAL2 = ensurecolumn(XVAL2);
+    YVAL1 = ensurecolumn(YVAL1); YVAL2 = ensurecolumn(YVAL2);
+
+    % Make sure lengths match
+    [XVAL1,YVAL1] = lengthmatch(XVAL1,YVAL1);
+    [XVAL2,YVAL2] = lengthmatch(XVAL2,YVAL2);
+
+    % Use knnsearch to find stitch point
+    XVAL1index = mode(knnsearch(XVAL1,XVAL2)); % freq in XVAL1 closest to the freqs in XVAL2
+    XVAL2index = mode(knnsearch(XVAL2,XVAL1));
+    normfactor = YVAL1(XVAL1index)./YVAL2(XVAL2index);
+    
+    YVAL2 = YVAL2.*normfactor;
+    
+    % Remove stitch point (double-counted)
+    YVAL2(XVAL2index) = [];
+    XVAL2(XVAL2index) = [];
+    
+    % Stitch together
+    XSTITCH = [XVAL1; XVAL2];
+    YSTITCH = [YVAL1; YVAL2];
+    return
+end
+
+% Compute an FFT for a given time vector and data vector
+function [FFTXHz,FFTY,FFTXcm] = fftfn(TIMESEC,DATA)
+%%% This function computes the Fourier transform of a time-domain dataset,
+% given a time input in seconds.
+% (outputs are in cm-1 or Hz)
+
+    % Ensure column vectors
+    TIMESEC = ensurecolumn(TIMESEC); DATA = ensurecolumn(DATA);
+
+    % Make sure lengths match
+    [TIMESEC,DATA] = lengthmatch(TIMESEC,DATA);
+
+    % Make sure time vector is evenly spaced
+    deltat = zeros(length(TIMESEC)-1,1);
+    for i=1:length(TIMESEC)-1
+        deltat(i) = round(1e2*(TIMESEC(i+1)-TIMESEC(i)))/1e2; % round to nearest 0.01
+    end
+    % Check spacing
+    tspacing = unique(deltat); % length 1 <-> evenly spaced t
+    % Check t spacing (even) and length (odd)
+    if isscalar(tspacing) && mod(length(TIMESEC),2) == 1
+        TINT = TIMESEC; DATAINT = DATA; % data are good for fitting
+    else % interpolate
+        TINT = linspace(TIMESEC(1),TIMESEC(end),length(TIMESEC)*2-1).';
+        DATAINT = spline(TIMESEC, DATA, TINT);
+    end
+
+    % Calculate FFT
+    dt = abs(TINT(1)-TINT(2)); % time step, s
+    fs = 1/dt; % freq bandwidth, Hz
+    resfft = fft(DATAINT); % raw FFT
+    resfftshift = fftshift(resfft); % centered FFT
+    FFTY = abs(resfftshift).^2/length(DATAINT); % power spectrum
+    FFTXHz = (-length(DATAINT)/2+1/2:length(DATAINT)/2-1/2)*(fs/length(DATAINT)); % FFT frequency vector in Hz
+    FFTXcm = FFTXHz/29979245800; % FFT freq in cm-1
+
+    % Crop FFT output to positive frequencies
+    FFTY = FFTY(FFTXcm >= 0); % y-values (amplitude component of FFT)
+    FFTXHz = FFTXHz(FFTXcm >= 0); % output in Hz
+    FFTXcm = FFTXcm(FFTXcm >= 0); % output in cm-1
+    return
+end
+
+% Create a Voigt lineshape for plotting from Fityk
+function [VOIGTY,VOIGTX] = Voigt(HEIGHT,CENTER,GWIDTH,SHAPE,X)
+%%% This function creates a Voigt lineshape (x and y vectors) for an
+% input height, center, Gaussian width, shape, and x vector.
+% Designed to take Fityk outputs as inputs.
+% X must be odd in length for VOIGTX to equal X.
+
+    % Convert GWIDTH and SHAPE to GFHWM and LFWHM
+    GFWHM = GWIDTH*2*sqrt(log(2)); % Fityk "gwidth" term: GFWHM = gwidth * 2*sqrt(log(2)) = gwidth * 1.6651
+    LFWHM = 2*GWIDTH*SHAPE; % Fityk "shape" term: LFWHM = 2*shape*gwidth
+
+    % Make sure X is a column vector
+    if length(X) == width(X)
+        X = X.';
+    end
+    % Create X vector for convolution input (center around 0)
+    if mod(length(X),2) == 0 % if length(X) is even
+        X(end+1) = X(end)+(X(end)-X(end-1)); % extend by 1 point
+    end
+    INPUTX = linspace(0.5*(min(X)-CENTER),0.5*(max(X)-CENTER),0.5*(length(X)+1)).';
+    % Make Gaussian
+    Gstdev = GFWHM./(2*sqrt(2*log(2)));
+    Gdecay = -1./(2*Gstdev.^2);
+    GAUSSIAN = exp(Gdecay.*(INPUTX).^2); % centered at 0
+    % Make Lorentzian
+    gamma = LFWHM./2;
+    LORENTZIAN = (gamma./pi).*((INPUTX).^2+gamma.^2).^-1; % centered at 0
+    % Make Voigt
+    VOIGTY = conv(GAUSSIAN,LORENTZIAN);
+    VOIGTY = HEIGHT.*VOIGTY./max(VOIGTY);
+    VOIGTX = linspace(min(X)-CENTER,max(X)-CENTER,length(X)).';
+    VOIGTX = VOIGTX+CENTER;
     return
 end
