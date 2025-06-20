@@ -14,10 +14,12 @@
 %%% v11 - added pkfitnt function for BF+NDR-TPA Fano fitting
 %%% v12 - fixed SBR calculation and updated .tif saving function
 %%% v13 - updated post-batch analysis and added config presets,
-% FFT function, and function for stitching BonFIRE spectra together
+% FFT function, bfstitch function, new Voigt function for Fityk output
+%%% v14 - fixed plotting subsets in post-batch analysis, updated image
+% processing for new Save_tif function, fixed lifetime fitting per-file
 
 % Initialize
-% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_03_25_PK/'
+% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_06_18_PK/'
 clear; clc; close all;
 
 % Configuration presets
@@ -38,8 +40,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 1; % 1 = write batch processed files, 0 = not
-writefigsyn = 1; % 1 = write figure files, 0 = not
+writeprocyn = 0; % 1 = write batch processed files, 0 = not
+writefigsyn = 0; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -51,6 +53,7 @@ verbose = 2; % 2 = all info on figure, 1 = regular figure annotation,
 showprogress = 1; % show progress as fitting proceeds over pixels in image
 snrcutoff = -Inf; % SNR minimum for lifetime image fitting (-Inf = fit all)
 tracktiming = 0; % 0 = default, 1 = track timing of calculations
+autocropimages = 0; % 0 = don't crop, 1 = crop for piezostage settling
 troubleshoot = 0; % 0 = default, 1 = show everything along the way
 
 % Even more configuration options (largely obsolete)
@@ -92,7 +95,7 @@ if preconfig > 0
         loadprevious = 0; runtype = 2; ltfittype = []; writeprocyn = 0; writefigsyn = 0;
     end
     if preconfig == 3 % full analysis but no fitting
-        loadprevious = 0; runtype = 0; ltfittype = 0; writeprocyn = 0; writefigsyn = 0;
+        loadprevious = 0; runtype = 0; ltfittype = 0; basefittype = 0; writeprocyn = 0; writefigsyn = 0;
     end
     if preconfig == 4 % load previous
         loadprevious = []; runtype = 0; ltfittype = []; writeprocyn = 1; writefigsyn = 1;
@@ -176,7 +179,7 @@ if loadprevious == 0 % run new analysis
         summary.('folder'+string(ii)).foldername = subfolders{ii};
 
         % Set current values per-folder (when specified)
-        currt0 = setvalue(t0pos,folders,ii); currltfittype = setvalue(ltfittype, folders,ii);
+        currt0 = setvalue(t0pos,folders,ii); 
         currbasefittype = setvalue(basefittype,folders,ii); currdatatype = setvalue(setdatatype,folders,ii);
         currpulsewidth = setvalue(setpulsewidth,folders,ii); currfiletype = setvalue(setfiletype,folders,ii);
         currfilenameconv = setvalue(setfilenameconv,folders,ii);
@@ -236,6 +239,7 @@ if loadprevious == 0 % run new analysis
         if ~isempty(datafiles) % skip subfolders without data files
             for jj = startfile:totalfiles % jj = file number in subfolder ii
                 currentfile = fullfile(workingdirectory,subfolders{ii},datafiles{jj}); % full file path
+                currltfittype = setvalue(ltfittype,folders,ii); % determine fit type per-file
                 
                 % Filename parsing
                 macseparator = count(currentfile,'/');
@@ -297,7 +301,7 @@ if loadprevious == 0 % run new analysis
                 end
 
                 % Empty parameters for new file
-                IRpower = []; prbpower = []; xsteps = []; ysteps = []; filebase = '-';
+                IRpower = []; prbpower = []; xsteps = []; ysteps = []; filebase = '-'; dwelltime = [];
                 
                 if currfilenameconv == 1 % parse .txts
                     fileinfo = split(folderinfo(end),"-"); % split filename at "-"s
@@ -504,6 +508,7 @@ if loadprevious == 0 % run new analysis
                     end
                     channels(1) = 1;
                 end
+
                 % Check for CH1, CH3, CH4, and SPCM files
                 ch1file = string(currentfile(1:end-7))+'CH1'+string(currentfile(end-3:end));
                 if isfile(ch1file)
@@ -532,6 +537,30 @@ if loadprevious == 0 % run new analysis
                         loaddata(workingdirectory,subfolders,ii,spcmfile,...
                         currfiletype,trimlastT,trimfirstT,xsteps,ysteps,guessTlist);
                     channels(5) = 5;
+                end
+                
+                % Auto-crop images
+                if autocropimages == 1 && currdatatype == 1 && currfiletype > 1 % needs .tif or .raw
+                    % Crop first column and bottom 35 ms worth of rows (rounded down)
+                    if ~isempty(dwelltime)
+                        croprows = floor(35./dwelltime);
+                    else % guess 20 ms dwell time if not specified
+                        croprows = floor(35./20);
+                    end
+
+                    data = data(1:end-croprows,2:end,:); 
+                    if isfile(ch1file)
+                        ch1data = ch1data(1:end-croprows,2:end,:);
+                    end
+                    if isfile(ch3file)
+                        ch3data = ch3data(1:end-croprows,2:end,:);
+                    end
+                    if isfile(ch4file)
+                        ch4data = ch4data(1:end-croprows,2:end,:);
+                    end
+                    if isfile(spcmfile)
+                        spcmdata = spcmdata(1:end-croprows,2:end,:);
+                    end
                 end
                 
                 % Prepare for image test run
@@ -1038,8 +1067,12 @@ if loadprevious == 0 % run new analysis
                     end
                 end
                 if writeprocyn == 1 && currdatatype == 1 % write processed image tif
-                    Save_tif(outname+'_proc.tif',bfarray,lt1array,...
-                        lt2array,a1a2array,r2array)
+                    finaltif = bfarray;
+                    finaltif(:,:,2) = lt1array;
+                    finaltif(:,:,3) = lt2array;
+                    finaltif(:,:,4) = a1a2array;
+                    finaltif(:,:,5) = r2array;
+                    Save_tif(outname+'_proc.tif',finaltif,{'BonFIRE','Tau1','Tau2','A1/A2','R^2'})
                 end
                 if runtype == 0 % close background figures if not a test run
                     close all;
@@ -1187,6 +1220,7 @@ clearvars -except targetfolders summary workingdirectory subfolders
 figvis = 'on';
 
 % Analysis options
+subset = []; % [] = dialog, targetfolders = run all
 analysistype = []; % 0 = nothing, 1 = load data, 2 = contours, 
 % 3 = lifetimes, 4 = peak fitting, 5 = peak overlay, 6 = lifetime-weighted spectra,
 % 7 = Tsweep comparison, [] = dialog
@@ -1194,7 +1228,8 @@ savecontours = 0; % 1 = save contours, 0 = not
 xaxischoice = 0; % 0 = probeWL, 1 = sumfreq, 2 = detuning (specify),
 % 3 = detuning (Rh800 max), 4 = detuning (Rh800 0-0)
 logcontour = 0; % 0 = linear scale, 1 = log scale
-subset = []; % [] = dialog, targetfolders = run all
+fermiresonance = 1; % 0 = no Fermi resonance (one lifetime-weighted peak),
+% else = add an extra peak to lifetime-weighted fitting
 chooseoverlay = 0; % 1 = choose folders for overlay, 0 = overlay all
 plotfits = 0; % 1 = show individual peak fits, else don't
 updatesummary = 0; % 1 = update summary structure, 0 = don't
@@ -1282,6 +1317,16 @@ photothermal = squeeze(rawsig(:,end,:));
 defaultfont = 25;
 tD = time(1,:);
 
+% Make sure contour analysis runs if lifetime analysis is selected
+if max(ismember(analysistype,3))
+    if max(ismember(analysistype,2))
+        contourvis = figvis;
+    else
+        analysistype = [analysistype 2];
+        contourvis = 'off';
+    end
+end
+
 if max(ismember(analysistype,2)) % plotting contours
     for i=subset
         nfiles = summary.(sf{i}).nfiles;
@@ -1331,7 +1376,7 @@ if max(ismember(analysistype,2)) % plotting contours
             map3 = [linspace(startcolor(3),1,100) linspace(1,endcolor(3),100)];
             map = [map1.' map2.' map3.'];
             % Plotting
-            contour = figure('visible',figvis);
+            contour = figure('visible',contourvis);
             tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
             % Time 1D cross-section
             nexttile([1 3]);
@@ -1449,9 +1494,9 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
                 startcolor = [0 0.35 0.5]; % turquoise
                 endcolor = [0.8 0.2 0.2]; % red
                 [gx,gy,soln,fwhms] = pkfitnt(xval,yval);
-                peakfits.('folder'+string(i)).center = soln(5);
-                peakfits.('folder'+string(i)).amp = soln(3);
-                peakfits.('folder'+string(i)).bftpa = soln(3)./soln(2);
+                peakfits.(sf{i}).center = soln(5);
+                peakfits.(sf{i}).amp = soln(3);
+                peakfits.(sf{i}).bftpa = soln(3)./soln(2);
                 % % Check Fano fitting
                 % figure; hold on; plot(xval,yval,'o'); plot(gx,soln(1)+soln(2)*gx,'--')
                 % plot(gx,soln(1)+soln(2)*gx+soln(6).*((soln(7).*soln(8)+gx-soln(5)).^2)./(soln(8).^2+(gx-soln(5)).^2),'--'); plot(gx,gy,'--');
@@ -1461,11 +1506,11 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
                 npeaks = 4;
                 % Fitting
                 [gx,gy,soln,fwhms] = pkfit(xval,yval,npeaks,4,'positive'); % DFG sweep -- 4Gauss+polynomial
-                peakfits.('folder'+string(i)).center = soln(8);
-                peakfits.('folder'+string(i)).amp = soln(6);
+                peakfits.(sf{i}).center = soln(8);
+                peakfits.(sf{i}).amp = soln(6);
             end
-            peakfits.('folder'+string(i)).fwhms = fwhms;
-            peakfits.('folder'+string(i)).fitvector = soln;
+            peakfits.(sf{i}).fwhms = fwhms;
+            peakfits.(sf{i}).fitvector = soln;
         else % probe sweep
             xstring = 'ω_{probe} (cm^{-1})';
             w1 = 1e7./prb(1:nfiles,i);
@@ -1483,13 +1528,13 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
             % Fitting
             xval = w1; yval = max(sigmatrix,[],2); yval = yval./max(yval);
             [gx,gy,soln,fwhms] = pkfit(xval,yval,2,1,'positive'); % 2 Gaussians, linear background
-            peakfits.('folder'+string(i)).center1 = soln(8);
-            peakfits.('folder'+string(i)).center2 = soln(11);
-            peakfits.('folder'+string(i)).amp1 = soln(6);
-            peakfits.('folder'+string(i)).amp2 = soln(9);
-            peakfits.('folder'+string(i)).fwhm1 = fwhms(1);
-            peakfits.('folder'+string(i)).fwhm2 = fwhms(2);
-            peakfits.('folder'+string(i)).fitvector = soln;
+            peakfits.(sf{i}).center1 = soln(8);
+            peakfits.(sf{i}).center2 = soln(11);
+            peakfits.(sf{i}).amp1 = soln(6);
+            peakfits.(sf{i}).amp2 = soln(9);
+            peakfits.(sf{i}).fwhm1 = fwhms(1);
+            peakfits.(sf{i}).fwhm2 = fwhms(2);
+            peakfits.(sf{i}).fitvector = soln;
         end
         if plotfits == 1
             figure; hold on; box on;
@@ -1499,12 +1544,12 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
             xlim([min(w1) max(w1)]);
             ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
         end
-        peakfits.('folder'+string(i)).foldername = string(subfolders(targetfolders(i)));
-        peakfits.('folder'+string(i)).xval = xval;
-        peakfits.('folder'+string(i)).yval = yval;
-        peakfits.('folder'+string(i)).xfit = gx;
-        peakfits.('folder'+string(i)).yfit = gy;
-        peakfits.('folder'+string(i)).xstring = xstring;
+        peakfits.(sf{i}).foldername = string(subfolders(targetfolders(i)));
+        peakfits.(sf{i}).xval = xval;
+        peakfits.(sf{i}).yval = yval;
+        peakfits.(sf{i}).xfit = gx;
+        peakfits.(sf{i}).yfit = gy;
+        peakfits.(sf{i}).xstring = xstring;
     end
 end
 
@@ -1515,7 +1560,7 @@ if max(ismember(analysistype,5)) % peak overlay
     else
         overset = targetfolders(subset);
     end
-    overleg = subfolders(targetfolders(overset));
+    overleg = subfolders(overset);
     figure; hold on; box on; % overlay figure
 
     % Lifetime-weighted spectra
@@ -1536,19 +1581,19 @@ if max(ismember(analysistype,5)) % peak overlay
             [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
             ltwt = lt1(:,i).*pkht(:,i);
             [maxwt,maxltind] = max(ltwt);
-            peakfits.('folder'+string(i)).ltweighted.maxlt = lt1(maxltind,i); % lifetime at peak of lt-weighted sweep
-            peakfits.('folder'+string(i)).ltweighted.maxsrr = srr(maxltind,i); % SRR at peak of lt-weighted sweep
+            peakfits.(sf{i}).ltweighted.maxlt = lt1(maxltind,i); % lifetime at peak of lt-weighted sweep
+            peakfits.(sf{i}).ltweighted.maxsrr = srr(maxltind,i); % SRR at peak of lt-weighted sweep
             % Fitting
             xval = wIR(:,i); yval = ltwt./maxwt;
-            [gx,gy,soln,fwhms] = pkfit(xval,yval,1,2,'positive');
-            peakfits.('folder'+string(i)).ltweighted.xval = xval;
-            peakfits.('folder'+string(i)).ltweighted.yval = yval;
-            peakfits.('folder'+string(i)).ltweighted.center = soln(8);
-            peakfits.('folder'+string(i)).ltweighted.amp = soln(6);
-            peakfits.('folder'+string(i)).ltweighted.fwhms = fwhms;
-            peakfits.('folder'+string(i)).ltweighted.fitvector = soln;
-            peakfits.('folder'+string(i)).ltweighted.xfit = gx;
-            peakfits.('folder'+string(i)).ltweighted.yfit = gy;
+            [gx,gy,soln,fwhms] = pkfit(xval,yval,1+(fermiresonance~=0),2,'positive');
+            peakfits.(sf{i}).ltweighted.xval = xval;
+            peakfits.(sf{i}).ltweighted.yval = yval;
+            peakfits.(sf{i}).ltweighted.center = soln(8);
+            peakfits.(sf{i}).ltweighted.amp = soln(6);
+            peakfits.(sf{i}).ltweighted.fwhms = fwhms;
+            peakfits.(sf{i}).ltweighted.fitvector = soln;
+            peakfits.(sf{i}).ltweighted.xfit = gx;
+            peakfits.(sf{i}).ltweighted.yfit = gy;
             % Plotting
             plot(xval,yval./max(gy),marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
             plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
@@ -1567,20 +1612,20 @@ if max(ismember(analysistype,5)) % peak overlay
         [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
         plot([-1 -1],[-1 -1],'-','Marker',marker,'MarkerSize',marksize,'LineWidth',2,'Color',linecolor);
     end
-    xlabel(peakfits.('folder'+string(i)).xstring); ylabel('Normalized peak (AU)');
+    xlabel(peakfits.(sf{i}).xstring); ylabel('Normalized peak (AU)');
     if max(ismember(analysistype,6)) == 0 % make legend if not made already
         legend(overleg); lg = legend; lg.EdgeColor = [1 1 1]; lg.AutoUpdate = 'off';
     end
     ax = gca; ax.FontSize = 15; xl1 = []; xl2 = [];
-    for j=1:length(overset)
-        i = overset(j);
+    for j=1:length(subset)
+        i = subset(j);
         % Decide color and markers
         [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
         % Plot data
-        xval = peakfits.('folder'+string(i)).xval;
-        yval = peakfits.('folder'+string(i)).yval;
-        gx = peakfits.('folder'+string(i)).xfit;
-        gy = peakfits.('folder'+string(i)).yfit;
+        xval = peakfits.(sf{i}).xval;
+        yval = peakfits.(sf{i}).yval;
+        gx = peakfits.(sf{i}).xfit;
+        gy = peakfits.(sf{i}).yfit;
         if max(gy) > max(yval)
             yval = yval./max(gy); gy = gy./max(gy);
         else
@@ -1637,6 +1682,53 @@ end
 if updatesummary == 1
     summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 end
+
+% %% Write out data
+% xval = peakfits.folder2.xval;
+% yval = peakfits.folder2.yval;
+% writematrix([xval yval],'10mM_C6_TP-BonFIRE_final.txt')
+% 
+% xval = peakfits.folder3.xval;
+% yval = peakfits.folder3.yval;
+% writematrix([xval yval],'10mM_C6_OP-BonFIRE_final.txt')
+
+%% Plot nice fits from Fityk
+
+fitx = 1100:0.5:2000; fitx = fitx.';
+
+tpxval = peakfits.folder2.xval;
+tpyval = peakfits.folder2.yval;
+
+opxval = peakfits.folder3.xval;
+opyval = peakfits.folder3.yval;
+
+% Fits
+tpfit = Voigt(0.956218, 1581.19, 8.42039, 0.43387, fitx) + Voigt(0.384746, 1610.82, 17.7476, -3.66412e-06,fitx) + Voigt(0.383082, 1513.38, 2.16193, 3.10271,fitx) + Voigt(0.114016, 1475.74, 6.69957, 0.89777,fitx) + Voigt(0.0738297, 1706.46, 1.36665, 7.63446,fitx) + 0.03309 + -3.42454e-05*fitx + -5.29249e-09*fitx.^2 + -4.60501e-13*fitx.^3 + 1.2596e-15*fitx.^4 + 1.5939e-18*fitx.^5 + 1.39819e-21*fitx.^6;
+
+opfit = Voigt(0.982864, 1581.2, 7.97253, 0.411469,fitx) + Voigt(0.0569104, 1708.35, 9.65537, -0.661646,fitx) + Voigt(0.201537, 1603.94, 19.0095, -1.62934e-05,fitx) + Voigt(0.204601, 1515.29, 5.1392, 1.35808,fitx);
+
+
+col1 = [0.6 0.2 0.2];
+col2 = [0.2 0.6 0.6];
+
+figure; hold on; box on;
+plot([-1 -1],[-1 -1],'o-','MarkerSize',8,'LineWidth',2,'Color',col1);
+plot([-1 -1],[-1 -1],'^-','MarkerSize',8,'LineWidth',2,'Color',col2);
+legend('TP-BonFIRE','BonFIRE');
+lg = legend; lg.Box = 'off'; lg.AutoUpdate = 'off';
+% Plot data
+plot(tpxval,tpyval,'o','MarkerSize',8,'LineWidth',2,'Color',col1)
+plot(opxval,2.*opyval,'^','MarkerSize',8,'LineWidth',2,'Color',col2)
+% Plot fits
+plot(fitx,tpfit,'-','LineWidth',3,'Color',col1);
+plot(fitx,2.*opfit,'-','LineWidth',3,'Color',col2);
+% xlim([1500 1750]);
+xlim([1430 1750]);
+xlabel('IR frequency (cm^{–1})'); ylabel('Normalized BonFIRE');
+ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
+
+
+
 
 
 %% Pairwise comparisons
@@ -1886,9 +1978,9 @@ function [BASECURVE,BLEACHRATE,BASEFIT,LBBASE,UBBASE,SBR,CORRSIG,CORRSIGBASE,TBA
         baseopt=optimoptions(@lsqnonlin);
         baseopt.MaxFunctionEvaluations = 1e6; % let the fit run longer
         baseopt.MaxIterations = 1e6; % let the fit run longer
-        baseopt.FunctionTolerance = abs(max(SIGNAL))*1e-12; % make the fit more accurate
-        baseopt.OptimalityTolerance = abs(max(SIGNAL))*1e-12; % make the fit more accurate
-        baseopt.StepTolerance = abs(max(SIGNAL))*1e-12; % make the fit more precise
+        baseopt.FunctionTolerance = abs(max(SIGNAL))*1e-10; % make the fit more accurate
+        baseopt.OptimalityTolerance = abs(max(SIGNAL))*1e-10; % make the fit more accurate
+        baseopt.StepTolerance = abs(max(SIGNAL))*1e-10; % make the fit more precise
         if TROUBLESHOOT == 0
             baseopt.Display = 'off'; % silence console output
         end
@@ -1948,7 +2040,7 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
 % vector. It can guess what type of fit to use based on frequency.
 
     if isempty(CURRLTFITTYPE) % auto-choose lifetime fitting
-        if IRWNum > 1702 && IRWNum < 1800 % carbonyl
+        if IRWNum > 1680 && IRWNum < 1800 % carbonyl
             CURRLTFITTYPE = 1; % monoexponential
         else % not carbonyl
             if IRWNum < 2400 && IRWNum > 2000 % triple bond
@@ -2043,8 +2135,8 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
             0,0.1,... % amp 2, τ2min (ps)
             0.1]; % β min
         ub = [newubbase,20,3*sqrt(2),... % basecoefs, IRF center (ps), IRF max (ps)
-            10*SIGPEAK,100,... % amp 1, τ1max (ps)
-            10*SIGPEAK,100,... % amp 2, τ2max (ps)
+            10*abs(SIGPEAK),100,... % amp 1, τ1max (ps)
+            10*abs(SIGPEAK),100,... % amp 2, τ2max (ps)
             1.8]; % β max
         % Implement fit type options
         if CURRLTFITTYPE == 1 % Gauss*monoexp
@@ -2071,15 +2163,15 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
         if SNR > 10 % let run longer for high-SNR
             options.MaxFunctionEvaluations = 1e6; % let the fit run longer
             options.MaxIterations = 1e6; % let the fit run longer
-            options.FunctionTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more accurate
-            options.OptimalityTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more accurate
-            options.StepTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more precise
-        else
-            options.MaxFunctionEvaluations = 1e5; % let the fit run longer
-            options.MaxIterations = 1e5; % let the fit run longer
             options.FunctionTolerance = abs(SIGPEAK)*1e-10; % make the fit more accurate
             options.OptimalityTolerance = abs(SIGPEAK)*1e-10; % make the fit more accurate
             options.StepTolerance = abs(SIGPEAK)*1e-10; % make the fit more precise
+        else
+            options.MaxFunctionEvaluations = 1e5; % let the fit run longer
+            options.MaxIterations = 1e5; % let the fit run longer
+            options.FunctionTolerance = abs(SIGPEAK)*1e-8; % make the fit more accurate
+            options.OptimalityTolerance = abs(SIGPEAK)*1e-8; % make the fit more accurate
+            options.StepTolerance = abs(SIGPEAK)*1e-8; % make the fit more precise
         end
         if TROUBLESHOOT == 0
             options.Display = 'off'; % silence console output
@@ -2228,8 +2320,8 @@ function [TFIT,FITCURVE,FITVAL,RESID] = basicltfit(T,SIGNAL,CURRLTFITTYPE)
         1e-2]; % β min
     ub = [Inf,Inf,0,Inf,Inf,... % basecoefs, 
         max(T),3*sqrt(2),... % IRF center (ps), IRF max (ps)
-        10*sigmax,100,... % amp 1, τ1max (ps)
-        10*sigmax,100,... % amp 2, τ2max (ps)
+        10*abs(sigmax),100,... % amp 1, τ1max (ps)
+        10*abs(sigmax),100,... % amp 2, τ2max (ps)
         1e2]; % β max
     % Implement fit type options
     if CURRLTFITTYPE == 1 % Gauss*monoexp
@@ -2246,9 +2338,9 @@ function [TFIT,FITCURVE,FITVAL,RESID] = basicltfit(T,SIGNAL,CURRLTFITTYPE)
     options=optimoptions(@lsqnonlin);
     options.MaxFunctionEvaluations = 1e6; % let the fit run longer
     options.MaxIterations = 1e6; % let the fit run longer
-    options.FunctionTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more accurate
-    options.OptimalityTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more accurate
-    options.StepTolerance = abs(max(SIGINT)-min(SIGINT))*1e-12; % make the fit more precise
+    options.FunctionTolerance = abs(sigmax)*1e-10; % make the fit more accurate
+    options.OptimalityTolerance = abs(sigmax)*1e-10; % make the fit more accurate
+    options.StepTolerance = abs(sigmax)*1e-10; % make the fit more precise
     options.Display = 'off'; % silence console output
     FITVAL = lsqnonlin(fun,r0,lb,ub,options); % fit coeffs
     FITVECTOR = FITVAL(1)+FITVAL(2)*exp(-FITVAL(3)*(TINT-FITVAL(4)))+FITVAL(5)*TINT+ ... % baseline
@@ -2308,9 +2400,9 @@ function [GX,GY,SOLN,FWHMS] = pkfit(XVAL,YVAL,nGauss,nPoly,peakorient)
     opt=optimoptions(@lsqnonlin);
     opt.MaxFunctionEvaluations = 1e6; % let the fit run longer
     opt.MaxIterations = 1e6; % let the fit run longer
-    opt.FunctionTolerance = (max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
-    opt.OptimalityTolerance = (max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
-    opt.StepTolerance = (max(YVAL)-min(YVAL)).*1e-12; % make the fit more precise
+    opt.FunctionTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
+    opt.OptimalityTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more accurate
+    opt.StepTolerance = abs(max(YVAL)-min(YVAL)).*1e-12; % make the fit more precise
     opt.Display = 'off'; % silence console output
 
     if max(XVAL) < 5000 && min(XVAL) > 825 % IR sweep
@@ -2596,6 +2688,7 @@ function [VOIGTY,VOIGTX] = VoigtOrig(HEIGHT,CENTER,GFWHM,LFWHM,X)
 % input height, center, Gaussian FWHM, Lorentzian FWHM, and x vector.
 % X must be odd in length for VOIGTX to equal X.
 
+    GFWHM = abs(GFWHM); LFWHM = abs(LFWHM);
     % Make sure X is a column vector
     if length(X) == width(X)
         X = X.';
@@ -2714,6 +2807,9 @@ function [LINECOLOR,MARKER,MARKSIZE] = colormarkset(INDEX,LOOPLENGTH,COLORMAP)
             end
             if strcmp(COLORMAP,'rwb2') % red-white-blue gradient 2
                 startcolor = [103 0 30]./255; peakcolor = [240 240 240]./255; endcolor = [6 48 97]./255;
+            end
+            if strcmp(COLORMAP,'rpb') % red-purple-blue gradient
+                startcolor = [200 0 30]./255; peakcolor = [100 0 170]./255; endcolor = [0 60 200]./255;
             end
             if strcmp(COLORMAP,'rwb1inv')  % inverted red-white-blue gradient 1
                 startcolor = [48 124 188]./255; peakcolor = [235 242 250]./255; endcolor = [231 48 41]./255;
@@ -3011,6 +3107,8 @@ function [VOIGTY,VOIGTX] = Voigt(HEIGHT,CENTER,GWIDTH,SHAPE,X)
 % input height, center, Gaussian width, shape, and x vector.
 % Designed to take Fityk outputs as inputs.
 % X must be odd in length for VOIGTX to equal X.
+
+    GWIDTH = abs(GWIDTH); SHAPE = abs(SHAPE);
 
     % Convert GWIDTH and SHAPE to GFHWM and LFWHM
     GFWHM = GWIDTH*2*sqrt(log(2)); % Fityk "gwidth" term: GFWHM = gwidth * 2*sqrt(log(2)) = gwidth * 1.6651
