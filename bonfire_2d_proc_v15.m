@@ -17,19 +17,20 @@
 % FFT function, bfstitch function, new Voigt function for Fityk output
 %%% v14 - fixed plotting subsets in post-batch analysis, updated image
 % processing for new Save_tif function, fixed lifetime fitting per-file
+%%% v15 - updated for MATLAB R2025a
 
 % Initialize
-% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_06_18_PK/'
+% cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_07_08_PK/'
 clear; clc; close all;
 
 % Configuration presets
-preconfig = 0; % 0 = none (set manually), 1 = full analysis,
+preconfig = 2; % 0 = none (set manually), 1 = full analysis,
 % 2 = test run, 3 = full analysis but no fitting, 4 = load previous
 
 % Main configuration options
 loadprevious = []; % [] = auto-detect, 0 = new analysis,
 % 1 = load individual .dats, 2 = read structure.xml, 3 = re-process partial
-runtype = 2; % 0 = process all, 1 = test run with a few files,
+runtype = 0; % 0 = process all, 1 = test run with a few files,
 % 2 = examine a single file, 3 = examine a single image
 targetfolders = []; % indices of folders to process, [] = dialog
 t0pos = []; % specify t0 position(s) (mm), [] = autofind
@@ -40,8 +41,8 @@ ltfittype = []; % [] = auto-choose, 0 = no fitting, 1 = Gaussian*monoexp,
 basefittype = []; % [] = auto-choose, 0 = no baseline fit, 1 = linear, 
 % 2 = exponential, 3 = exponential+linear
 fitchannels = 2; % specify data channels to fit, [] = dialog
-writeprocyn = 0; % 1 = write batch processed files, 0 = not
-writefigsyn = 0; % 1 = write figure files, 0 = not
+writeprocyn = 1; % 1 = write batch processed files, 0 = not
+writefigsyn = 1; % 1 = write figure files, 0 = not
 powernormtype = 1; % 0 = no normalization, 1 = normalize by IR power,
 % 2 = normalize by probe and IR powers, 3 = 2 + PMT gain correction
 setpulsewidth = []; % define pulse width (ps) in fit, [] = float
@@ -565,7 +566,7 @@ if loadprevious == 0 % run new analysis
                 
                 % Prepare for image test run
                 if runtype > 0 && currdatatype == 1
-                    preview = figure; image(data(:,:,ceil(imagesize(3)/4)),'CDataMapping','Scaled');
+                    preview = figure; image(data(:,:,ceil(imagesize(3)/4)),'CDataMapping','Scaled'); %theme(preview,'light');
                     title('Preview'); colormap('hot'); cb = colorbar; cb.FontSize = 12;
                     cb.Label.String='BonFIRE preview (AU)'; cb.Label.Rotation=270;
                     cb.Label.VerticalAlignment = "bottom"; cb.LineWidth = 2; datacursormode; 
@@ -899,7 +900,7 @@ if loadprevious == 0 % run new analysis
                             pulsewidth = string(sprintf('%0.3g',fwhm));
                             
                             if verbose > 0 % make figure annotation
-                                annot = {'ω_{IR} = '+string(IRWN)+' cm^{-1}, λ_{probe} = '+...
+                                annot = {'ω_{IR} = '+string(IRWN)+' cm^{–1}, λ_{probe} = '+...
                                     string(prbWL)+' nm, SNR = '+string(snr)+', SNR_{v2} = '+string(snrv2)};
                                 if ~isempty(currltfittype)
                                     if currltfittype == 1
@@ -986,9 +987,9 @@ if loadprevious == 0 % run new analysis
                             % | CH2  CH2 |
 
                             % Make figure
-                            fig = figure('visible',visibility);
+                            fig = figure('visible',visibility); %theme(fig,'light'); 
                             if length(nonzeros(channels)) == 2 % DC (CH1/SPCM) and AC (CH2)
-                                tiledlayout(3,3); nexttile([1 2]);  % DC
+                                tiledlayout(3,3); nexttile([1 2]); % DC
                                 if max(ismember(channels,1))
                                     makesubpanel(t,ch1,ch1sds,tbase,ch1base,ch1basecurve,tfit,ch1fitcurve,...
                                         ch1resid,ch1label,ch1legend,1);
@@ -1325,6 +1326,8 @@ if max(ismember(analysistype,3))
         analysistype = [analysistype 2];
         contourvis = 'off';
     end
+else
+    contourvis = figvis;
 end
 
 if max(ismember(analysistype,2)) % plotting contours
@@ -1332,7 +1335,7 @@ if max(ismember(analysistype,2)) % plotting contours
         nfiles = summary.(sf{i}).nfiles;
         if isscalar(unique(rmmissing(nonzeros(round(prb(:,i)./10))))) % no probe tuning --> IR sweep
             xstring = 'Time delay (ps)';
-            ystring = 'ω_{IR} (cm^{-1})';
+            ystring = 'ω_{IR} (cm^{–1})';
             w1 = wIR(1:nfiles,i);
             w2 = prb(1:nfiles,i);
             nonswept = string(round(w2(1)))+' nm';
@@ -1350,7 +1353,7 @@ if max(ismember(analysistype,2)) % plotting contours
             ystring = 'λ_{probe} (nm)';
             w1 = prb(1:nfiles,i);
             w2 = wIR(1:nfiles,i);
-            nonswept = string(round(w2(1)))+' cm^{-1}';
+            nonswept = string(round(w2(1)))+' cm^{–1}';
             sumfreq = 1e7./w1+w2;
             % Blue-white-orange gradient for contour map
             startcolor = [0 0 1]; % blue
@@ -1376,7 +1379,7 @@ if max(ismember(analysistype,2)) % plotting contours
             map3 = [linspace(startcolor(3),1,100) linspace(1,endcolor(3),100)];
             map = [map1.' map2.' map3.'];
             % Plotting
-            contour = figure('visible',contourvis);
+            contour = figure('visible',contourvis); %theme(contour,'light');
             tiledlayout(4,4,'TileSpacing','compact','Padding','compact');
             % Time 1D cross-section
             nexttile([1 3]);
@@ -1413,21 +1416,21 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     else
         if xaxischoice == 1
             xdata = sumfreq;
-            label = 'ω_{IR}+ω_{probe} (cm^{-1})';
+            label = 'ω_{IR}+ω_{probe} (cm^{–1})';
         else % some detuning
             if xaxischoice == 3
                 detuning = sumfreq-(1e7/696);
-                label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+                label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{–1})';
             else
                 if xaxischoice == 4
                     detuning = sumfreq-(1e7/713);
-                    label = 'ω_{IR}+ω_{probe}-ω_{0-0} (cm^{-1})';
+                    label = 'ω_{IR}+ω_{probe}-ω_{0-0} (cm^{–1})';
                 else % xaxischoice = 2 or other
                     prompt = {'Specify absorption maximum (nm).'};
                     dlgtitle = 'Set up detuning'; dims = [1 45]; definput = {'696'};
                     coordanswer = inputdlg(prompt,dlgtitle,dims,definput);
                     detuning = sumfreq-(1e7/str2double(coordanswer));
-                    label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{-1})';
+                    label = 'ω_{IR}+ω_{probe}-ω_{max} (cm^{–1})';
                 end
             end
             xdata = detuning;
@@ -1435,7 +1438,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     end
     % Default lifetime comparison
     ltlegend = strings(length(subset),1);
-    figure('visible',figvis);
+    ltfig = figure('visible',figvis); %theme(ltfig,'light');
     tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
     % τ1
     nexttile([1 2]); hold on;
@@ -1443,7 +1446,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
         i = subset(j);
         [linecolor,marker,marksize] = colormarkset(j,length(subset),[]);
         plot(xdata,lt1(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
-        ltlegend(i) = string(wIR(1,i))+' cm{-1}';
+        ltlegend(i) = string(wIR(1,i))+' cm{–1}';
     end
     xticks([]); ylabel('τ_{1} (ps)'); % no xlabel
     hold off; xlim([min(xdata) max(xdata)]); ylim([0 5]); 
@@ -1478,7 +1481,7 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
         nfiles = summary.(sf{i}).nfiles;
         sigmatrix = csig(1:nfiles,:,i);
         if isscalar(unique(rmmissing(nonzeros(round(prb(:,i)./10))))) % no probe tuning --> IR sweep
-            xstring = 'ω_{IR} (cm^{-1})';
+            xstring = 'ω_{IR} (cm^{–1})';
             w1 = wIR(1:nfiles,i);
             w2 = prb(1:nfiles,i);
             nonswept = string(round(w2(1)))+' nm';
@@ -1512,10 +1515,10 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
             peakfits.(sf{i}).fwhms = fwhms;
             peakfits.(sf{i}).fitvector = soln;
         else % probe sweep
-            xstring = 'ω_{probe} (cm^{-1})';
+            xstring = 'ω_{probe} (cm^{–1})';
             w1 = 1e7./prb(1:nfiles,i);
             w2 = wIR(1:nfiles,i);
-            nonswept = string(round(w2(1)))+' cm^{-1}';
+            nonswept = string(round(w2(1)))+' cm^{–1}';
             sumfreq = w1+w2;
             % Color setup
             startcolor = [0 0 1]; % blue
@@ -1561,7 +1564,7 @@ if max(ismember(analysistype,5)) % peak overlay
         overset = targetfolders(subset);
     end
     overleg = subfolders(overset);
-    figure; hold on; box on; % overlay figure
+    overfig = figure; hold on; box on; %theme(overfig,'light'); % overlay figure
 
     % Lifetime-weighted spectra
     if max(ismember(analysistype,6))
@@ -1599,7 +1602,7 @@ if max(ismember(analysistype,5)) % peak overlay
             plot(gx,gy./max(gy),'LineWidth',3,'Color',linecolor);
         end
         xlim([2100 2300]); ylim([0 1.2]);
-        xlabel('ω_{IR} (cm^{-1})'); ylabel('Lifetime-weighted spectra (AU)');
+        xlabel('ω_{IR} (cm^{–1})'); ylabel('Lifetime-weighted spectra (AU)');
         ax = gca; ax.FontSize = 15;
         nexttile([1 1]); hold on;
     end
@@ -1667,9 +1670,17 @@ if max(ismember(analysistype,7)) % Tsweep comparison
                 if ~isscalar(unique(rmmissing(nonzeros(round(IRpowers(1:nfiles,j)./10))))) % power sweep
                     [sortmod,sortinds] = sort(IRpowers(fileset,j));
                     leg = string(round(10*sortmod)./10)+' mW';
-                else % guess modulation frequency sweep
-                    [sortmod,sortinds] = sort(modfr(fileset,j));
-                    leg = string(round(sortmod)./1000)+' kHz';
+                else 
+                    if ~isscalar(unique(rmmissing(nonzeros(round(modfr(1:nfiles,j)./10))))) % modulation frequency sweep
+                        [sortmod,sortinds] = sort(modfr(fileset,j));
+                        leg = string(round(sortmod)./1000)+' kHz';
+                    else % use filenames
+                        sortinds = 1:nfiles;
+                        for iii=1:length(fileset)
+                            jjj = fileset(iii);
+                            leg(iii) = string(summary.('folder'+string(j)).('file'+string(jjj)).fileName);
+                        end
+                    end
                 end
             end
         end
@@ -1683,56 +1694,9 @@ if updatesummary == 1
     summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 end
 
-% %% Write out data
-% xval = peakfits.folder2.xval;
-% yval = peakfits.folder2.yval;
-% writematrix([xval yval],'10mM_C6_TP-BonFIRE_final.txt')
-% 
-% xval = peakfits.folder3.xval;
-% yval = peakfits.folder3.yval;
-% writematrix([xval yval],'10mM_C6_OP-BonFIRE_final.txt')
-
-%% Plot nice fits from Fityk
-
-fitx = 1100:0.5:2000; fitx = fitx.';
-
-tpxval = peakfits.folder2.xval;
-tpyval = peakfits.folder2.yval;
-
-opxval = peakfits.folder3.xval;
-opyval = peakfits.folder3.yval;
-
-% Fits
-tpfit = Voigt(0.956218, 1581.19, 8.42039, 0.43387, fitx) + Voigt(0.384746, 1610.82, 17.7476, -3.66412e-06,fitx) + Voigt(0.383082, 1513.38, 2.16193, 3.10271,fitx) + Voigt(0.114016, 1475.74, 6.69957, 0.89777,fitx) + Voigt(0.0738297, 1706.46, 1.36665, 7.63446,fitx) + 0.03309 + -3.42454e-05*fitx + -5.29249e-09*fitx.^2 + -4.60501e-13*fitx.^3 + 1.2596e-15*fitx.^4 + 1.5939e-18*fitx.^5 + 1.39819e-21*fitx.^6;
-
-opfit = Voigt(0.982864, 1581.2, 7.97253, 0.411469,fitx) + Voigt(0.0569104, 1708.35, 9.65537, -0.661646,fitx) + Voigt(0.201537, 1603.94, 19.0095, -1.62934e-05,fitx) + Voigt(0.204601, 1515.29, 5.1392, 1.35808,fitx);
-
-
-col1 = [0.6 0.2 0.2];
-col2 = [0.2 0.6 0.6];
-
-figure; hold on; box on;
-plot([-1 -1],[-1 -1],'o-','MarkerSize',8,'LineWidth',2,'Color',col1);
-plot([-1 -1],[-1 -1],'^-','MarkerSize',8,'LineWidth',2,'Color',col2);
-legend('TP-BonFIRE','BonFIRE');
-lg = legend; lg.Box = 'off'; lg.AutoUpdate = 'off';
-% Plot data
-plot(tpxval,tpyval,'o','MarkerSize',8,'LineWidth',2,'Color',col1)
-plot(opxval,2.*opyval,'^','MarkerSize',8,'LineWidth',2,'Color',col2)
-% Plot fits
-plot(fitx,tpfit,'-','LineWidth',3,'Color',col1);
-plot(fitx,2.*opfit,'-','LineWidth',3,'Color',col2);
-% xlim([1500 1750]);
-xlim([1430 1750]);
-xlabel('IR frequency (cm^{–1})'); ylabel('Normalized BonFIRE');
-ax = gca; ax.FontSize = 15; ax.LineWidth = 2;
-
-
-
-
 
 %% Pairwise comparisons
-statcomparison = 0;
+statcomparison = 1;
 if statcomparison == 1
     clear; close all; clc;
     cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2024_03_12/'
@@ -1748,7 +1712,7 @@ if statcomparison == 1
     name1 = 'Buffer';
     testtype = 'mean'; % mean or median
     % Run comparison and make summary plot
-    figure; box on;
+    statfig = figure; box on; pbaspect([1.3 1 1]); %theme(statfig,'light');
     [buffermean,condmean,pval,cohend,cohenlower,cohenupper] = ...
         statcompare(buffer,condensate,name1,name2,testtype);
     bufferstd = std(buffer);
@@ -1765,7 +1729,7 @@ if statcomparison == 1
 
     t = binedg(1:end-1); signal = bufferdata;
     [tfit,fitcurve,~,~] = basicltfit(t,signal,2);
-    figure; hold on; box on;
+    histfig = figure; hold on; box on; pbaspect([1.3 1 1]); %theme(histfig,'light');
     histogram(buffer,'BinEdges',binedg,'FaceColor',[40 189 189]./255);
     histogram(condensate,'BinEdges',binedg,'FaceColor',[180 93 226]./255);
     % plot(t,signal,'ko','LineWidth',2);
@@ -2773,14 +2737,20 @@ function [LINECOLOR,MARKER,MARKSIZE] = colormarkset(INDEX,LOOPLENGTH,COLORMAP)
     mark(4) = ">"; mark(5) = "x"; mark(6) = "diamond";
     mark(7) = "^"; mark(8) = "+"; mark(9) = "pentagram";
     mark(10) = "v"; mark(11) = "o"; mark(12) = "hexagram"; 
-    mark(13) = "_"; mark(14) = "|"; mark(15) = "x";
+    mark(13) = "_"; mark(14) = "|"; mark(15) = "x"; mark(16) = ".";
     
     % Set marker type
-    if INDEX <= length(mark) % if less than 15
-        MARKER = mark(INDEX); MARKSIZE = 8; % use unique marker and markersize 8
-    else
+    ind = mod(INDEX,length(mark));
+    if ind == 0 % if point is a multiple of 16
         MARKER = '.'; MARKSIZE = 20; % otherwise, uses '.', size 20
+    else
+        MARKER = mark(ind); MARKSIZE = 8; % use unique marker and markersize 8
     end
+    % if INDEX <= length(mark) % if less than 15
+    %     MARKER = mark(INDEX); MARKSIZE = 8; % use unique marker and markersize 8
+    % else
+    %     MARKER = '.'; MARKSIZE = 20; % otherwise, uses '.', size 20
+    % end
 
     % Set color scheme
     if (isempty(COLORMAP) || strcmp(COLORMAP,'default')) && LOOPLENGTH <= height(colorset) % default colorset
@@ -2902,7 +2872,7 @@ function tcompare(TIME,SIG,NAMES,COLORMAP,OPTION)
     if isempty(COLORMAP)
         COLORMAP = 'fire';
     end
-    figure; hold on; box on;
+    ltcomp = figure; hold on; box on; %theme(ltcomp,'light');
     for i=1:height(SIG)
         [LINECOLOR,MARKER,MARKSIZE] = colormarkset(i,height(SIG),COLORMAP);
         plot([-1 -1],[-1 -1],'Marker',MARKER,'MarkerSize',MARKSIZE,'Color',LINECOLOR,'LineWidth',2);
@@ -3135,5 +3105,128 @@ function [VOIGTY,VOIGTX] = Voigt(HEIGHT,CENTER,GWIDTH,SHAPE,X)
     VOIGTY = HEIGHT.*VOIGTY./max(VOIGTY);
     VOIGTX = linspace(min(X)-CENTER,max(X)-CENTER,length(X)).';
     VOIGTX = VOIGTX+CENTER;
+    return
+end
+
+% Calculate solvent reaction fields
+function [SRF,ONSAGERFACTOR] = onsager(DIELEC,DIPOLEDEBYE,REFRAC,VOLUMEA3)
+% This function calculates Onsager solvent reaction fields given a list of
+% dielectric constants and the solute properties of interest (dipole moment
+% in D, refractive index, and volume in A^3)
+
+    % Set up vectors (possibly being fed a list of DIELEC)
+    SRF = zeros(length(DIELEC),1); numdielec = SRF;
+    ONSAGERFACTOR = SRF;
+
+    % Parse inputs - replace empty values with Rh800
+    if isempty(DIPOLEDEBYE)
+        DIPOLEDEBYE = 5.3383; % solute dipole moment, D
+    end
+    if isempty(REFRAC)
+        REFRAC = 1.5; % solute refractive index
+    end
+    if isempty(VOLUMEA3)
+        VOLUMEA3 = 164; % solute molecular volume, A^3
+    end
+
+    % Set up constants
+    c = 299792458; % m/s
+    permit = 8.85418782e-12; % F/m, permittivity of free space
+    coulomb = 1/(4*pi*permit); % N m^2 C^-2, Coulomb constant
+    % h = 6.62607015e-34; % J s or kg m^2 s^-1
+    % hbar = h/(2*pi); % J s
+    % kB = 1.380649e-23; % J/K
+    % temperature = 300; % K
+    % kT = kB*temperature; % J
+    % c100 = c*100; % cm/s, or Hz per cm-1
+    % NAv = 6.02214076e23; % molecules per mole
+    % amukg = 1/(NAv*1e3); % kg per 1 amu (bc 1 mol of 1 amu particles weighs 1 g)
+    % angm = 1e-10; % m per 1 angstrom
+
+    % Calculate SRFs
+    dipoleSI = DIPOLEDEBYE*1e-21/c; % dipole moment in C m
+    volumeSI = VOLUMEA3*1e-30; % molecular volume in m^3
+
+    % Convert to numbers if needed
+    for i=1:length(DIELEC)
+        if isstring(DIELEC(i)) || ischar(DIELEC(i)) % look up dielectric constants if fed solvent names
+            numdielec(i) = 1; % obviously wrong if unmatched
+
+            % Organics
+            if strcmpi(DIELEC(i),"DMF") || strcmpi(DIELEC(i),"dimethylformamide")
+                numdielec(i) = 36.7;
+            end
+            if strcmpi(DIELEC(i),"DOX") || strcmpi(DIELEC(i),"dioxane") || strcmpi(DIELEC(i),"1,4-dioxane")
+                numdielec(i) = 2.25;
+            end
+            if strcmpi(DIELEC(i),"EtOAc") || strcmpi(DIELEC(i),"ethyl acetate")
+                numdielec(i) = 6.02;
+            end
+            if strcmpi(DIELEC(i),"THF") || strcmpi(DIELEC(i),"tetrahydrofuran")
+                numdielec(i) = 7.52;
+            end
+            if strcmpi(DIELEC(i),"Tol") || strcmpi(DIELEC(i),"toluene")
+                numdielec(i) = 2.38;
+            end
+            if strcmpi(DIELEC(i),"Hex70") || strcmpi(DIELEC(i),"7:3 hexane:chloroform")
+                numdielec(i) = 3.09;
+            end
+            if strcmpi(DIELEC(i),"CHCl3") || strcmpi(DIELEC(i),"chloroform")
+                numdielec(i) = 4.81;
+            end
+            if strcmpi(DIELEC(i),"BBZ") || strcmpi(DIELEC(i),"benzyl benzoate")
+                numdielec(i) = 4.9;
+            end
+            if strcmpi(DIELEC(i),"DBE") || strcmpi(DIELEC(i),"dibenzyl ether")
+                numdielec(i) = 3.86;
+            end
+
+            % Water/DMSO mixtures
+            if strcmpi(DIELEC(i),"PBS") || strcmpi(DIELEC(i),"PBS100") || strcmpi(DIELEC(i),"water") || strcmpi(DIELEC(i),"D2O") || strcmpi(DIELEC(i),"H2O")
+                numdielec(i) = 80.1;
+            end
+            if strcmpi(DIELEC(i),"PBS80") || strcmpi(DIELEC(i),"DMSO20") || strcmpi(DIELEC(i),"D2O80")
+                numdielec(i) = (0.8*80.1)+(0.2*46.7);
+            end
+            if strcmpi(DIELEC(i),"PBS60") || strcmpi(DIELEC(i),"DMSO40") || strcmpi(DIELEC(i),"D2O60")
+                numdielec(i) = (0.6*80.1)+(0.4*46.7);
+            end
+            if strcmpi(DIELEC(i),"PBS40") || strcmpi(DIELEC(i),"DMSO60") || strcmpi(DIELEC(i),"D2O40")
+                numdielec(i) = (0.4*80.1)+(0.6*46.7);
+            end
+            if strcmpi(DIELEC(i),"PBS20") || strcmpi(DIELEC(i),"DMSO80") || strcmpi(DIELEC(i),"D2O20")
+                numdielec(i) = (0.1*80.1)+(0.8*46.7);
+            end
+            if strcmpi(DIELEC(i),"PBS0") || strcmpi(DIELEC(i),"DMSO") || strcmpi(DIELEC(i),"DMSO100") || strcmpi(DIELEC(i),"dimethylsulfoxide")
+                numdielec(i) = 46.7;
+            end
+            
+            % Alcohols
+            if strcmpi(DIELEC(i),"MeOH") || strcmpi(DIELEC(i),"methanol")
+                numdielec(i) = 32.7;
+            end
+            if strcmpi(DIELEC(i),"EtOH") || strcmpi(DIELEC(i),"ethanol")
+                numdielec(i) = 24.5;
+            end
+            if strcmpi(DIELEC(i),"iPrOH") || strcmpi(DIELEC(i),"isopropanol") || strcmpi(DIELEC(i),"isopropyl alcohol")
+                numdielec(i) = 17.9;
+            end
+            if strcmpi(DIELEC(i),"BuOH") || strcmpi(DIELEC(i),"butanol") || strcmpi(DIELEC(i),"n-butanol")
+                numdielec(i) = 17.8;
+            end
+            if strcmpi(DIELEC(i),"BnOH") || strcmpi(DIELEC(i),"BzOH") || strcmpi(DIELEC(i),"benzyl alcohol")
+                numdielec(i) = 13;
+            end
+        else % given numerical value
+            numdielec(i) = DIELEC(i);
+        end
+    end
+
+    for i=1:length(numdielec)
+        srfpart1 = -1*dipoleSI/(volumeSI); % 
+        srfpart2 = (2/3).*(numdielec(i)-1).*(REFRAC^2+2)./(2.*numdielec(i)+REFRAC^2);
+        SRF(i) = srfpart1.*srfpart2*coulomb*1e-8; % MV/cm
+        ONSAGERFACTOR(i) = -1*srfpart2; % without molecule-specific part
+    end
     return
 end
