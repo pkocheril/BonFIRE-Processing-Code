@@ -18,6 +18,8 @@
 %%% v14 - fixed plotting subsets in post-batch analysis, updated image
 % processing for new Save_tif function, fixed lifetime fitting per-file
 %%% v15 - updated for MATLAB R2025a
+%%% v16 - error fixes, added several new functions (bfloaddata, onsager,
+% figsave, and figlabel)
 
 % Initialize
 % cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_07_08_PK/'
@@ -87,13 +89,21 @@ workingdirectory = pwd; % get working directory path
 directorycontents = dir(fullfile(workingdirectory,'*')); % search working directory
 subfolders = setdiff({directorycontents([directorycontents.isdir]).name},{'.','..'}); % subfolders of working directory
 
+% Get version number
+versionnumber = version;
+year = split(versionnumber,'.');
+year = sscanf(string(year(1)),'%f');
+if year >= 25 % if MATLAB R2025a or later
+    set(groot, "defaultFigurePosition", [680 458 560 420]) % figure dimensions
+end
+
 % Apply config preset
 if preconfig > 0
     if preconfig == 1 % new full analysis
         loadprevious = 0; runtype = 0; ltfittype = []; writeprocyn = 1; writefigsyn = 1;
     end
     if preconfig == 2 % test run
-        loadprevious = 0; runtype = 2; ltfittype = []; writeprocyn = 0; writefigsyn = 0;
+        loadprevious = 0; runtype = 2; ltfittype = []; writeprocyn = 0; writefigsyn = 0; powernormtype = 0;
     end
     if preconfig == 3 % full analysis but no fitting
         loadprevious = 0; runtype = 0; ltfittype = 0; basefittype = 0; writeprocyn = 0; writefigsyn = 0;
@@ -102,7 +112,6 @@ if preconfig > 0
         loadprevious = []; runtype = 0; ltfittype = []; writeprocyn = 1; writefigsyn = 1;
     end
 end
-
 
 if isempty(loadprevious) % auto-detect previous analysis
     guessxml = fullfile(workingdirectory,'summarystructure.xml');
@@ -570,7 +579,7 @@ if loadprevious == 0 % run new analysis
                     title('Preview'); colormap('hot'); cb = colorbar; cb.FontSize = 12;
                     cb.Label.String='BonFIRE preview (AU)'; cb.Label.Rotation=270;
                     cb.Label.VerticalAlignment = "bottom"; cb.LineWidth = 2; datacursormode; 
-                    xlabel('X'); ylabel('Y'); ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
+                    xlabel('X'); ylabel('Y'); ax = gca; ax.FontSize = 10; ax.LineWidth = 2;
                     if runtype == 3
                         prompt = {'Specify starting X coordinate.','Specify starting Y coordinate.',...
                             'Specify ending X coordinate.','Specify ending Y coordinate.'};
@@ -998,7 +1007,7 @@ if loadprevious == 0 % run new analysis
                                         spcmresid,spcmlabel,spcmlegend,5);
                                 end
                                 nexttile([1 1]); xticks([]); yticks([]);
-                                printoutdim = [0.67 0.7 0.3 0.25]; nexttile([2 3]);
+                                printoutdim = [0.62 0.7 0.33 0.25]; nexttile([2 3]);
                             else
                                 % CH1-4 and SPCM
                                 if length(nonzeros(channels)) > 2
@@ -1027,7 +1036,7 @@ if loadprevious == 0 % run new analysis
                                 resid,ch2label,ch2legend,2);
                             % Annotate with experiment info
                             annotation('rectangle',printoutdim,'Color',[1 1 1],'FaceColor',[1 1 1]); % box to cover
-                            annotation('textbox',printoutdim,'String',annot);
+                            annotation('textbox',printoutdim,'String',annot,'FontSize',7);
                             if writefigsyn == 1
                                 saveas(fig,outname+'_proc.png')
                             end
@@ -1316,7 +1325,7 @@ pkht = abs(pkht);
 ltavg = (ltr.*lt1+lt2)./(ltr+1);
 photothermal = squeeze(rawsig(:,end,:));
 defaultfont = 25;
-tD = time(1,:);
+% tD = time(1,:);
 
 % Make sure contour analysis runs if lifetime analysis is selected
 if max(ismember(analysistype,3))
@@ -1475,6 +1484,9 @@ if max(ismember(analysistype,3)) % lifetime comparisons
 end
 
 peakfits.title = 'All fits'; % set up structure
+for i=1:length(subfolders)
+    peakfits.('folder'+string(i)).foldername = string(subfolders(i));
+end
 
 if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line for IR
     for i=subset
@@ -1545,7 +1557,7 @@ if max(ismember(analysistype,4)) % peak fitting - Gauss2 for probe, Gauss+line f
             plot(gx,gy,'LineWidth',3,'Color',endcolor);
             xlabel(xstring); ylabel('Relative peak (AU)');
             xlim([min(w1) max(w1)]);
-            ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
+            ax = gca; ax.FontSize = 10; ax.LineWidth = 2;
         end
         peakfits.(sf{i}).foldername = string(subfolders(targetfolders(i)));
         peakfits.(sf{i}).xval = xval;
@@ -1561,7 +1573,7 @@ if max(ismember(analysistype,5)) % peak overlay
         [overset,~] = listdlg('PromptString',{'Select folders to overlay.'},...
         'SelectionMode','multiple','ListString',subfolders(targetfolders));
     else
-        overset = targetfolders(subset);
+        overset = subset;
     end
     overleg = subfolders(overset);
     overfig = figure; hold on; box on; %theme(overfig,'light'); % overlay figure
@@ -1694,7 +1706,6 @@ if updatesummary == 1
     summary.peakfits = peakfits; writestruct(summary,'summarystructure.xml',FileType="xml");
 end
 
-
 %% Pairwise comparisons
 statcomparison = 1;
 if statcomparison == 1
@@ -1717,7 +1728,7 @@ if statcomparison == 1
         statcompare(buffer,condensate,name1,name2,testtype);
     bufferstd = std(buffer);
     condstd = std(condensate);
-    ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
+    ax = gca; ax.FontSize = 10; ax.LineWidth = 2;
 
     % Get y values from histograms
     binstep = 0.1;
@@ -1739,7 +1750,11 @@ if statcomparison == 1
     plot(tfit+binstep./2,fitcurve,'-','LineWidth',3,'Color',[180 93 226]./255);
     xlim([min(binedg) max(binedg)]); ylim([0 Inf]);
     xlabel('Lifetime (ps)'); ylabel('Counts');
-    ax = gca; ax.FontSize = 12; ax.LineWidth = 2;
+    ax = gca; ax.FontSize = 10; ax.LineWidth = 2;
+    figlabel('(a)'); savecompare = 0;
+    if savecompare == 1
+        figsave(histfig,'Histogramfigure_autosave.png','png');
+    end
 
     % Example Voigt plotting
     [voigty1,voigtx1] = Voigt(1,1,1,1,1:0.1:500);
@@ -1750,6 +1765,9 @@ if statcomparison == 1
 
     % Example FFT
     [fftx,ffty] = fftfn(xstitch,ystitch);
+
+    % Example data loading
+    [t,signal] = bfloaddata();
 end
 
 
@@ -2198,7 +2216,7 @@ function [TINT,SIGINT,FITVECTOR,TFIT,FITCURVE,FITVAL,LIFETIME1,LIFETIME2,LT1LT2,
         FFTX = freqHz/29979245800; % FFT freq in cm-1
         if TROUBLESHOOT == 1
             % Check fit
-            figure; tiledlayout(3,1); nexttile([1 1]); plot(TINT,RESID); nexttile([2 1]); plot(T,SIGNAL,'o',TINT,FITVECTOR); title('Fitting')
+            figure; tiledlayout(3,1); nexttile([1 1]); plot(T,RESID); nexttile([2 1]); plot(T,SIGNAL,'o',TINT,FITVECTOR); title('Fitting')
             % Check FFT
             figure; plot(FFTX,FFTY); title('FFT of residuals');
         end
@@ -2527,7 +2545,7 @@ function makesubpanel(T,SIGNAL,SIGSDS,TBASE,SIGBASE,BASECURVE,TFIT,FITCURVE,...
     if ~isempty(SIGBASE)
         plot(TBASE,SIGBASE,'o','Color',col2,'LineWidth',2);
     end
-    ax = gca; ax.FontSize = 12; ax.LineWidth = 2; hold off;
+    ax = gca; ax.FontSize = 10; ax.LineWidth = 2; hold off;
     return
 end
 
@@ -2539,7 +2557,7 @@ function makeimagepanel(array,XSTEPS,YSTEPS,cblabel)
     daspect([1 1 1]); xticks([]); yticks([]); cb = colorbar;
     cb.Label.Rotation=270; cb.Label.VerticalAlignment = "bottom"; cb.FontSize = 12;
     xlim([1 YSTEPS]); ylim([1 XSTEPS-2]); % crop out bottom two rows
-    ax = gca; ax.FontSize = 12;
+    ax = gca; ax.FontSize = 10;
     if cblabel == 1
         cb.Label.String='BonFIRE (AU)';
         ax.CLim = [0 Inf];
@@ -2613,7 +2631,7 @@ function [g1mean,g2mean,PVAL,COHEND,COHENLOWER,COHENUPPER] = statcompare(group1,
     annotation('textbox',[0.4 0.7 0.2 0.2],'String',ann,...
         'FitBoxToText','on','FontSize',12,'EdgeColor',[1 1 1]);
     title('')
-    ax = gca; ax.FontSize = 12;
+    ax = gca; ax.FontSize = 10;
     return
 end
 
@@ -2872,7 +2890,7 @@ function tcompare(TIME,SIG,NAMES,COLORMAP,OPTION)
     if isempty(COLORMAP)
         COLORMAP = 'fire';
     end
-    ltcomp = figure; hold on; box on; %theme(ltcomp,'light');
+    figure; hold on; box on; %theme(ltcomp,'light');
     for i=1:height(SIG)
         [LINECOLOR,MARKER,MARKSIZE] = colormarkset(i,height(SIG),COLORMAP);
         plot([-1 -1],[-1 -1],'Marker',MARKER,'MarkerSize',MARKSIZE,'Color',LINECOLOR,'LineWidth',2);
@@ -3195,7 +3213,7 @@ function [SRF,ONSAGERFACTOR] = onsager(DIELEC,DIPOLEDEBYE,REFRAC,VOLUMEA3)
                 numdielec(i) = (0.4*80.1)+(0.6*46.7);
             end
             if strcmpi(DIELEC(i),"PBS20") || strcmpi(DIELEC(i),"DMSO80") || strcmpi(DIELEC(i),"D2O20")
-                numdielec(i) = (0.1*80.1)+(0.8*46.7);
+                numdielec(i) = (0.2*80.1)+(0.8*46.7);
             end
             if strcmpi(DIELEC(i),"PBS0") || strcmpi(DIELEC(i),"DMSO") || strcmpi(DIELEC(i),"DMSO100") || strcmpi(DIELEC(i),"dimethylsulfoxide")
                 numdielec(i) = 46.7;
@@ -3230,3 +3248,398 @@ function [SRF,ONSAGERFACTOR] = onsager(DIELEC,DIPOLEDEBYE,REFRAC,VOLUMEA3)
     end
     return
 end
+
+% All-in-one figure saving
+function figsave(FIGURE,FILENAME,FILETYPE)
+%%% This function saves figures (unifying the "saveas" and "print" 
+% functions of MATLAB).
+
+    FILENAME = string(FILENAME);
+
+    if ischar(FILETYPE)
+        FILETYPE = string(FILETYPE); % convert '' to ""
+    end
+
+    if isstring(FILETYPE)
+        if contains(FILETYPE,"svg","IgnoreCase",true) % svg
+            FILETYPE = 1;
+        else
+            if contains(FILETYPE,"eps","IgnoreCase",true) % eps
+                FILETYPE = 2;
+            else
+                if contains(FILETYPE,"pdf","IgnoreCase",true) % pdf
+                    FILETYPE = 3;
+                else % png or other
+                    FILETYPE = 0;
+                end
+            end
+        end
+    end
+
+    if FILETYPE == 0 % png, 600x600
+        print('-r600',FIGURE,FILENAME,'-dpng')
+    else
+        if FILETYPE == 1 % svg
+            saveas(FIGURE,string(FILENAME+".svg"),'svg');
+        else
+            if FILETYPE == 2 % eps
+                saveas(FIGURE,string(FILENAME+".eps"),'eps');
+            else % PDF
+                saveas(FIGURE,string(FILENAME+".pdf"),'pdf');
+            end
+        end
+    end
+
+    return
+end
+
+% Automatic labeling of figure subpanels
+function figlabel(LABEL)
+%%% This function creates a label at the top-left corner for a figure subpanel.
+
+    if ~ischar(LABEL)
+        LABEL = string(LABEL);
+        LABEL = char(LABEL);
+    end
+    
+    annotation('textbox',[0 0.8 0.2 0.2],'String',LABEL,...
+        'FitBoxToText','on','LineStyle','none','FontName','Arial','FontSize',25);
+    return
+end
+
+% Quick load BonFIRE data
+function [T,SIGNAL,INFO,DATA,SIGSDS,DELAYPOS] = bfloaddata(varargin)
+%%% This function loads BonFIRE data from a given input file, meant to be
+% a lighter, easier alternative to "loaddata"
+
+    % Use input parser and varargin to enable calling as "bfloaddata()"
+    defaultFile = 'nofile';
+    p = inputParser;
+    addOptional(p,'filename',defaultFile,@isfile);
+    parse(p,varargin{:})
+
+    CURRENTFILE = p.Results.filename;
+
+    % If file doesn't exist or no file specified, use file browser GUI
+    if ~exist(CURRENTFILE,'file') || isempty(CURRENTFILE) || ~isfile(CURRENTFILE)
+        [filename,folder] = uigetfile('*.*');
+        CURRENTFILE = fullfile(folder,filename);
+    end
+
+    % Filename parsing
+    macseparator = count(CURRENTFILE,'/');
+    winseparator = count(CURRENTFILE,'\');
+    if macseparator > winseparator % MacOS/UNIX
+        delimiter = "/";
+    else % Windows
+        delimiter = "\";
+    end
+    folderinfo = split(CURRENTFILE,delimiter); % split path into folders
+    filename = char(folderinfo(end));
+
+    % Figure out solution vs image data by filename
+    if ~contains(CURRENTFILE,'FOV') % filename doesn't have 'FOV'
+        currdatatype = 0; % solution data
+    else % filename has 'FOV'
+        currdatatype = 1; % image data
+    end
+
+    % Figure out file naming convention
+    if contains(CURRENTFILE,'.txt') %count(currentfile,'.txt') > 0
+        lookforhyphens = count(filename,'-');
+        if numel(lookforhyphens) > 5
+            currfilenameconv = 1; % my old .txts
+        else
+            currfilenameconv = 0; % even older .txts
+        end
+    else % .tif or .raw
+        if strcmp(filename(5:10),'cm-1_7') && contains(filename,' (') % filename ####cm-1_750 (##)...
+            currfilenameconv = 3; % manual probe sweep (before updated VI)
+        else
+            currfilenameconv = 2; % not a manual probe sweep
+        end
+    end
+
+    % Parse info from filename
+    if currfilenameconv == 1 % parse my old .txts
+        fileinfo = split(filename,"-"); % split filename at "-"s
+        prbWLstrfull = char(fileinfo(1)); prbWLstr = prbWLstrfull(1:end-1); prbWL = sscanf(prbWLstr,'%f'); % extract probe wavelength and convert to double
+        prbpowerstrfull = char(fileinfo(2)); prbpowerstr = prbpowerstrfull(1:end-2); prbpower = sscanf(prbpowerstr,'%f'); % extract probe power
+        signalWLstrfull = char(fileinfo(3)); signalWLstr = signalWLstrfull(1:end-2); signalWL = sscanf(signalWLstr,'%f'); % extract IR signal WL
+        IRpowerstrfull = char(fileinfo(4)); IRpowerstr = IRpowerstrfull(1:end-2); IRpower = sscanf(IRpowerstr,'%f'); % extract IR power
+        DFGWL = 1/((2/signalWL) - (1/1031.2)); DFGWN = 1e7/DFGWL; idlerWN = 1e7*((1/1031.2)-(1/signalWL)); % calculate DFG and idler
+        NDstrfull = char(fileinfo(5)); NDstr = NDstrfull(3:end); ND = sscanf(NDstr,'%f');  % extract ND
+        PMTstrfull = char(fileinfo(6)); PMTstr = PMTstrfull(4:end); pmtgain = sscanf(PMTstr,'%f'); % extract PMT gain
+        modfreqstrfull = char(fileinfo(7)); modfreqstr = modfreqstrfull(1:end-3); % extract modulation freq
+        if modfreqstrfull(end-2) == "k" % kHz
+            modfreq = 1e3*sscanf(modfreqstr,'%f');
+        else % MHz
+            modfreq = 1e6*sscanf(modfreqstr,'%f');
+        end
+        PMTBWstrfull = char(fileinfo(8)); PMTBWstr = PMTBWstrfull(1:end-3); % extract PMT bandwidth
+        if PMTBWstrfull(end-2) == "k" % kHz
+            pmtBW = 1e3*sscanf(PMTBWstr,'%f');
+        else % MHz
+            pmtBW = 1e6*sscanf(PMTBWstr,'%f');
+        end
+        filebase = strjoin(fileinfo(1:end-(numel(fileinfo)-1)),'-');
+    else % image file (.raw or .tif)
+        fileinfo = split(folderinfo(end),"_"); % split at "_"s
+        % channel = char(fileinfo(end)); % 'CH1','CH2','SPCM','CMOS'
+        if contains(filename,'DFG') && contains(filename,'Idler') % numel(fileinfo) > 5 % Haomin's VI naming
+            IRpowermeterstrfull = char(fileinfo(end-1)); IRpowermeterstr = IRpowermeterstrfull(2:end); IRpowermeter = sscanf(IRpowermeterstr,'%f'); % 'P0.4409' --> 0.4409
+            DFGWNstrfull = char(fileinfo(end-2)); DFGWNstr = DFGWNstrfull(4:end); DFGWN = sscanf(DFGWNstr,'%f'); % 'DFG3797.9' --> 3797.9
+            idlerWNstrfull = char(fileinfo(end-3)); idlerWNstr = idlerWNstrfull(6:end); idlerWN = sscanf(idlerWNstr,'%f'); % 'Idler2949.8' --> 2949.8
+            imgdim = char(fileinfo(end-4)); imgdimsplit = split(string(imgdim),"X"); ysteps = imgdimsplit(1); xsteps = imgdimsplit(end); xsteps = sscanf(xsteps,'%f'); ysteps = sscanf(ysteps,'%f'); % '5X5' --> 5 and 5 (Y by X)
+            prbWL = 1; % <-- unknown from filename
+            if IRpowermeter ~= 0
+                IRpower = IRpowermeter*300; % assuming 300 mW scale
+            end
+            filebase = strjoin(fileinfo(1:end-5),'_');
+        else
+            IRpower = 0; DFGWN = 0; idlerWN = 0;
+            filebase = strjoin(fileinfo(1:end-(numel(fileinfo)-1)),'_');
+        end
+    end
+
+    % Guess matching info file name
+    matchIRsweep = folderinfo; matchIRsweep(end) = {strjoin({filebase,'IRsweep.txt'},'_')}; matchIRsweep = strjoin(matchIRsweep,delimiter);
+    matchXYZTsweep = folderinfo; matchXYZTsweep(end) = {strjoin({filebase,'XYZT.txt'},'_')}; matchXYZTsweep = strjoin(matchXYZTsweep,delimiter);
+    matchZsweep = folderinfo; matchZsweep(end) = {strjoin({filebase,'Z.txt'},'_')}; matchZsweep = strjoin(matchZsweep,delimiter);
+    matchTsweep = folderinfo; matchTsweep(end) = {strjoin({filebase,'T.txt'},'_')}; matchTsweep = strjoin(matchTsweep,delimiter);
+    matchTXYZsweep = folderinfo; matchTXYZsweep(end) = {strjoin({filebase,'XYZT.txt'},'_')}; matchTXYZsweep = strjoin(matchTXYZsweep,delimiter);
+    
+    % Look for matching info file
+    if isfile(matchIRsweep)
+        infofilename = matchIRsweep;
+    else
+        if isfile(matchXYZTsweep)
+            infofilename = matchXYZTsweep;
+        else
+            if isfile(matchZsweep)
+                infofilename = matchZsweep;
+            else
+                if isfile(matchTsweep)
+                    infofilename = matchTsweep;
+                else
+                    if isfile(matchTXYZsweep)
+                        infofilename = matchTXYZsweep;
+                    else
+                        % warning('No matching .txt infofile found')
+                        infofilename = [];
+                    end
+                end
+            end
+        end
+    end
+    
+    % If info file found
+    if ~isempty(infofilename) % parse info from .txt files
+        infotable = readtable(infofilename); infofile = table2array(infotable(3:end,2));
+        if length(infofile) < 12 % import failed
+        	infoarray = importdata(infofilename); infofile = infoarray.data;
+        end
+        xinitial = infofile(1); xfinal = infofile(2); xsteps = infofile(3);
+        yinitial = infofile(4); yfinal = infofile(5); ysteps = infofile(6);
+        zinitial = infofile(7); zfinal = infofile(8); zsteps = infofile(9);
+        tinitial = infofile(10); tfinal = infofile(11); tsteps = infofile(12);
+        if round(infofile(13)) ~= 0 % for frequency doubling
+            prbWL = round(infofile(13));
+        else
+            prbWL = 515.6;
+        end
+        if round(infofile(14)) ~= 0
+            prbpower = infofile(14); % set to prbpowerset later if this is zero
+        end
+        ND = infofile(15);
+        idlerWN = round(infofile(16));
+        DFGWN = round(infofile(17));
+        if infofile(18) > 0
+            IRpower = infofile(18);
+        end
+        dwelltime = infofile(19);
+        if length(infofile) > 19 % extended-length files with more info
+            if round(infofile(20)) ~= 0
+                prbWL = infofile(20); % manual probe WL, nm
+            end
+            if round(infofile(21)) ~= 0
+                prbpower = infofile(21); % manual probe power, mW
+            end
+            if length(infofile) > 21 % if using updated code
+                pmtgain = infofile(22); % PMT gain
+                pmtBW = 1e3*infofile(23); % PMT bandwidth, Hz (kHz in file)
+                modfreq = 1e3*infofile(24); % IR modulation frequency, Hz (kHz in file)
+                pinholeyn = infofile(25); % 0 = bypassed, 1 = in place
+                prbdichroic = filterlookup(infofile(26));
+                pmtcmosmirror = filterlookup(infofile(27));
+                pmtfilter = filterlookup(infofile(28));
+                spcmfilter = filterlookup(infofile(29));
+                cmosfilter = filterlookup(infofile(30));
+            end
+            if length(infofile) > 30
+                dutycycle = infofile(31);
+            end
+            if length(infofile) > 31
+                probeFWHM = infofile(32); % nm
+                levanteFWHM = infofile(33); % nm
+            end
+            if length(infofile) > 39 % new unified VI
+                timeconstant = infofile(34); % ms
+                wheelfilter = filterlookup(infofile(35));
+                concentration = infofile(36);
+                dlstime = infofile(37); % ms
+                piezotime = infofile(38); % ms
+                TCorder = infofile(39);
+                levanteraw = table2array(infotable(end,2:end));
+                % levantespectrum(:,1) = levanteraw(1:2:end-1).';
+                % levantespectrum(:,2) = levanteraw(2:2:end).';
+            end
+        else % if not extended info
+            pmtgain = 1; pmtBW = 1; modfreq = 0; pinholeyn = 0;
+            prbdichroic = 0; pmtcmosmirror = 0; pmtfilter = 0;
+            spcmfilter = 0; cmosfilter = 0; dutycycle = 0;
+            probeFWHM = 0; levanteFWHM = 0; timeconstant = 0;
+            wheelfilter = 0; concentration = 0; dlstime = 0;
+            piezotime = 0; TCorder = 0; levanteraw = 0; 
+            % levantespectrum = 0;
+            % if verbose == 2
+            %     verbose = 1; % can't print out experimental parameters
+            % end
+        end
+    % else % no info file found
+    %     xsteps = 1; ysteps = 1; % if isempty?
+    end
+
+    % Summarize filters
+    bandpass = 'PMT'+string(pmtfilter)+'| SPCM'+string(spcmfilter)+'| CMOS'+string(cmosfilter)+'| Wheel'+string(wheelfilter);
+
+    % Assign IRWN by idler wavelength
+    idlerWL = 1e7/idlerWN; % signalWL = 1/((1/1031.2)-(1/idlerWL));
+    if idlerWL < 2600 % nm
+        IRWN = DFGWN;
+    else
+        IRWN = idlerWN;
+    end
+    
+    % Calculate wavelength for manual probe sweep
+    if currfilenameconv == 3
+        prbstrfull = char(fileinfo(2)); % probe WL - "780 (10)"
+        if length(prbstrfull) >= 6 % "780 (10)" --> 790 nm
+            prbsplit = split(prbstrfull," "); % "780" "(10)"
+            if isscalar(prbsplit) % "780finalcheck"
+                prbstr = prbstrfull(1:3); % '780'
+                prbWL = sscanf(prbstr,'%f'); % 780
+            else
+                prbWL1char = char(prbsplit(1)); % '780'
+                prbWL1 = sscanf(prbWL1char,'%f'); % 780
+                prbWL2char = char(prbsplit(2)); % '(10)' or 'finalcheck'
+                if length(prbWL2char) >= 7 % 'finalcheck'
+                    prbWL2 = 0;
+                else % '(10)'
+                    prbWL2str = prbWL2char(2:end-1); % '10'
+                    prbWL2 = sscanf(prbWL2str,'%f'); % 10
+                end
+                if totalfiles <= 130
+                    prbWL2 = 2*prbWL2; % step size 2 nm
+                end
+                prbWL = prbWL1 + prbWL2; % 790
+            end
+        else % "780" or "780nm"
+            prbstr = prbstrfull(1:3); % '780'
+            prbWL = sscanf(prbstr,'%f'); % 780
+        end
+    end
+    if isempty(IRpower) % if no IR power found
+        IRpower = 70; % guess power
+    end
+    if isempty(prbpower) % if no probe power found
+        prbpower = 300; % guess power
+    end
+
+    % Write experimental parameters to current structure
+    INFO.parameters.IRWN = IRWN; INFO.parameters.IRpower = IRpower; INFO.parameters.dwelltime = dwelltime;
+    INFO.parameters.prbWL = prbWL; INFO.parameters.prbpower = prbpower; INFO.parameters.ND = ND;
+    INFO.parameters.xsteps = xsteps; INFO.parameters.ysteps = ysteps; INFO.parameters.zsteps = zsteps; INFO.parameters.tsteps = tsteps;
+    INFO.parameters.xinitial = xinitial; INFO.parameters.yinitial = yinitial; INFO.parameters.zinitial = zinitial; INFO.parameters.tinitial = tinitial;
+    INFO.parameters.xfinal = xfinal; INFO.parameters.yfinal = yfinal; INFO.parameters.zfinal = zfinal; INFO.parameters.tfinal = tfinal;
+    INFO.parameters.pmtgain = pmtgain; INFO.parameters.pmtBW = pmtBW; INFO.parameters.modfreq = modfreq; INFO.parameters.pinholeyn = pinholeyn;
+    INFO.parameters.prbdichroic = prbdichroic; INFO.parameters.pmtcmosmirror = pmtcmosmirror; INFO.parameters.bandpass = bandpass;
+    INFO.parameters.pmtfilter = pmtfilter; INFO.parameters.spcmfilter = spcmfilter; INFO.parameters.cmosfilter = cmosfilter;
+    INFO.parameters.dutycycle = dutycycle; INFO.parameters.probeFWHM = probeFWHM; INFO.parameters.levanteFWHM = levanteFWHM;
+    INFO.parameters.timeconstant = timeconstant; INFO.parameters.concentration = concentration; INFO.parameters.dlstime = dlstime;
+    INFO.parameters.piezotime = piezotime; INFO.parameters.TCorder = TCorder; INFO.parameters.levanteraw = levanteraw;
+
+    % Guess Tlist name (per-file)
+    guessTlist = folderinfo; guessTlist(end) = {strjoin({filebase,'Tlist.txt'},'_')}; guessTlistname = strjoin(guessTlist,delimiter);
+
+    % Guess file type from filename
+    if contains(CURRENTFILE,'.txt') % solution .txt
+        DATA = importdata(CURRENTFILE); % load data
+        DELAYPOS = DATA(:,1); % save delay position
+        % CH1DATA = DATA(:,2);
+        SIGNAL = DATA(:,3);
+        SIGSDS = zeros(length(SIGNAL));
+    else % raw or tif
+        % Load Tlist
+        if isfile(guessTlistname)
+            DELAYPOS = importdata(guessTlistname);
+        else
+            if isfile(fullfile(folder,'Tlist.txt'))
+                DELAYPOS = importdata(fullfile(folder,'Tlist.txt'));
+            else
+                warning('No Tlist found - guessing Tlist')
+                DELAYPOS = linspace(1,4,61);
+            end
+        end
+
+        % Load data
+        if contains(CURRENTFILE,'.raw') % .raw
+            imgid = fopen(CURRENTFILE);
+            imgvector = fread(imgid,'real*8'); % load raw file as a vector
+            fclose('all');
+            matrixarea = length(imgvector)/length(DELAYPOS);
+            if matrixarea == xsteps*ysteps
+                % data match expected size - do nothing
+            else
+                if mod(sqrt(matrixarea),1) == 0 % if data are a square
+                    xsteps = sqrt(matrixarea); ysteps = sqrt(matrixarea);
+                else
+                    if currdatatype == 1 % if image data
+                        if trueTlist == 1 % and real Tlist file found
+                            warning('Mismatch between dimensions of .raw file and filename.')
+                        else % generated Tlist
+                            warning('Mismatch in dimensions of file - check Tlist specification and file dimensions.')
+                        end
+                    end
+                end
+            end
+            tempdata = reshape(imgvector,[ysteps,xsteps,length(DELAYPOS)]);
+            DATA = zeros(xsteps,ysteps,length(DELAYPOS));
+            for i=1:length(DELAYPOS)
+                DATA(:,:,i) = tempdata(:,:,i).'; % flip image to match Fiji
+            end
+        else % tif
+            DATA = double(tiffreadVolume(CURRENTFILE));
+        end
+
+        % Guess data type from filename
+        if contains(CURRENTFILE,'FOV') % image
+            SIGNAL = DATA;
+            SIGSDS = [];
+        else % solution - average points together
+            SIGNAL = squeeze(mean(DATA, [1 2]));
+            SIGSDS = squeeze(std(DATA, 0, [1 2]));
+        end
+    end
+
+    % Converting to time
+    cmmps = 299792458*1E3*1E-12; % c in mm/ps
+    T = zeros([length(DELAYPOS),1]);
+    % Guess time zero by peak
+    indexoffset = floor(length(DELAYPOS)/10); % using an offset to ignore sharp decay at start
+    [~, t0index] = max(SIGNAL(indexoffset:end)); % estimating t0 by peak
+    T(:) = (DELAYPOS(:)-DELAYPOS(t0index+indexoffset-1))*4/cmmps; % time vector in ps
+
+    return
+end
+
