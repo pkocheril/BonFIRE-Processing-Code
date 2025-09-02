@@ -1,2 +1,9 @@
 # BonFIRE-Processing-Code
-MATLAB code for processing BonFIRE spectral data. Continuously a work-in-progress.
+Code for processing BonFIRE spectral data. Continuously a work-in-progress.
+
+Written in MATLAB.
+
+## Main functions
+* data loading and identification by metadata
+* baseline correction
+* lifetime fitting with a convolved Gaussian IRF
