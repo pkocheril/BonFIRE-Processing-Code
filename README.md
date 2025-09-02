@@ -43,4 +43,4 @@ If the code is run in MATLAB with the folder structure as above and the default 
 If you found any of these functions useful, please consider citing one or more of the following papers:
 1. PA Kocheril, H Wang, D Lee, N Naji, and L Wei. J Phys Chem Lett 2024, 15 (19), 5306-5314.
 2. PA Kocheril, J Du, H Wang, RE Leighton, D Lee, Z Yang, N Naji, A Colazo, and L Wei. Chem Sci 2025, 16, 14905-14918.
-3. 
+
