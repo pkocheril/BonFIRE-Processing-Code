@@ -1,7 +1,7 @@
 # BonFIRE Processing Code
 Code for processing BonFIRE data. Continuously a work-in-progress. No guarantees of accuracy, completeness, or functionality.
 
-Written in MATLAB (R2024b or earlier recommended).
+Written in MATLAB (R2024b or earlier recommended for figure scaling).
 
 
 ## Highlights and main functions
@@ -28,11 +28,13 @@ Several MATLAB toolboxes (tested in v24.2) are required (or at least recommended
 
 ## Organization
 The main code ("bonfire_2d_proc_v#") should contain all dependencies and can be called in a folder organized as:
-* /Folder/
-  * /Folder/bonfire_2d_proc_v16.m
-  * /Folder/Subfolder/
-      * /Folder/Subfolder/data.raw
-      * /Folder/Subfolder/data.txt
+```
+Folder/
+  ├── bonfire_2d_proc_v16.m
+  └── Subfolder/
+      ├── data.raw
+      └── data.txt
+```
 
 
 ## Usage
@@ -41,6 +43,7 @@ If the code is run in MATLAB with the folder structure as above and the default 
 
 # How to cite
 If you found any of these functions useful, please consider citing one or more of the following papers:
+
 1. PA Kocheril, H Wang, D Lee, N Naji, and L Wei. *J Phys Chem Lett* **2024**, *15* (19), 5306-5314.
 2. PA Kocheril, J Du, H Wang, RE Leighton, D Lee, Z Yang, N Naji, A Colazo, and L Wei. *Chem Sci* **2025**, *16*, 14905-14918.
 
