@@ -30,7 +30,7 @@ Several MATLAB toolboxes (tested in v24.2) are required (or at least recommended
 The main code ("bonfire_2d_proc_v#") should contain all dependencies and can be called in a folder organized as:
 ```
 Folder/
-  ├── bonfire_2d_proc_v16.m
+  ├── bonfire_2d_proc_v#.m
   └── Subfolder/
       ├── data.raw
       └── data.txt
