@@ -1,5 +1,6 @@
 %% Batch processing of BonFIRE spectra and images
 %%% v1 (v1.1.0) - added gradientset function and several palettes, error fixes
+%%% v1_1 (v1.1.1) – error fix with post-batch color-coding
 
 % Initialize
 % cd '/Users/pkocheril/Documents/Caltech/WeiLab/Data/2025_10_21_PK/'
@@ -1442,7 +1443,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     nexttile([1 2]); hold on;
     for j=1:length(subset)
         i = subset(j);
-        [linecolor,marker,marksize] = colormarkset(j,length(subset),[]);
+        [linecolor,marker,marksize] = gradientset(j,length(subset));
         plot(xdata,lt1(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
         ltlegend(i) = string(wIR(1,i))+' cm{–1}';
     end
@@ -1453,7 +1454,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     nexttile([1 2]); hold on;
     for j=1:length(subset)
         i = subset(j);
-        [linecolor,marker,marksize] = colormarkset(i,length(subset),[]);
+        [linecolor,marker,marksize] = gradientset(i,length(subset));
         plot(xdata,lt2(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
     xlabel(label); ylabel('τ_{2} (ps)');
@@ -1463,7 +1464,7 @@ if max(ismember(analysistype,3)) % lifetime comparisons
     nexttile([2 1]); hold on;
     for j=1:length(subset)
         i = subset(j);
-        [linecolor,marker,marksize] = colormarkset(i,length(subset),[]);
+        [linecolor,marker,marksize] = gradientset(i,length(subset));
         plot(xdata,ltr(:,i),'.-','Marker',marker,'MarkerSize',marksize,'Color',linecolor,'LineWidth',2);
     end
     % set(gca,'Yscale','log');
@@ -1624,8 +1625,7 @@ if max(ismember(analysistype,5)) % peak overlay
     for j=1:length(subset)
         i = subset(j);
         % Decide color and markers
-        % [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
-        [linecolor,marker,marksize] = gradientset(j,length(overset),[]);
+        [linecolor,marker,marksize] = colormarkset(j,length(overset),[]);
         % Plot data
         xval = peakfits.(sf{i}).xval;
         yval = peakfits.(sf{i}).yval;
